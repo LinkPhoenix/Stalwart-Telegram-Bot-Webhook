@@ -1,3 +1,13 @@
+<div align="center">
+
+# ⚠️ BETA
+
+> **This project is currently in beta.** The documentation is not yet complete, and the project is not yet available on Docker Hub. Use at your own discretion.
+
+</div>
+
+---
+
 # Telegram Bot + Stalwart Webhook
 
 A Telegram bot that lets users subscribe to events from a [Stalwart](https://stalw.art) mail server sent via webhook. Subscribers receive real-time notifications for the events they choose (authentication, security, delivery, server startup).
