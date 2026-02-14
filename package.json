@@ -1,0 +1,15 @@
+{
+  "name": "tb-stalwart",
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "test:webhook": "bun run test/webhook.ts",
+    "test:webhook:local": "bun run test/webhook.ts http://localhost:3000"
+  },
+  "dependencies": {
+    "mysql2": "^3.17.0",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.8"
+  }
+}
