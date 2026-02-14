@@ -4,8 +4,7 @@
 # Configure Stalwart webhook to point to: http://tb-stalwart:3000/
 # (service name as hostname within the Docker network)
 #
-# With database: set DATABASE_USE=true, DATABASE=mariadb in .env, then:
-#   docker compose --profile db up -d
+# Database is enabled by default. To run without DB: set DATABASE_USE=false in .env
 
 services:
   tb-stalwart:
@@ -19,6 +18,8 @@ services:
     environment:
       - PORT=3000
       - SUBSCRIPTIONS_FILE=/app/data/subscriptions.json
+      - DATABASE_USE=${DATABASE_USE:-true}
+      - DATABASE=${DATABASE:-mariadb}
       - DATABASE_HOST=mariadb
       - DATABASE_PORT=3306
       - DATABASE_NAME=${DATABASE_NAME:-stalwart_bot}
@@ -37,8 +38,6 @@ services:
     image: mariadb:11
     container_name: tb-stalwart-db
     restart: unless-stopped
-    profiles:
-      - db
     environment:
       MARIADB_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD:-root}
       MARIADB_DATABASE: ${DATABASE_NAME:-stalwart_bot}

@@ -31,4 +31,4 @@ bun run test/webhook.ts http://localhost:3000 auth.failed
 
 Supported event types: `auth.error`, `auth.failed`, `auth.success`, `delivery.completed`, `delivery.delivered`, `delivery.failed`, `security.abuse-ban`, `security.authentication-ban`, `security.ip-blocked`, `server.startup`, `server.startup-error`
 
-The `.env` variables `WEEBHOOK_KEY`, `WEEBHOOK_USERNAME`, `WEEBHOOK_PASSWORD` are required.
+The `.env` variables `WEBHOOK_KEY`, `WEBHOOK_USERNAME`, `WEBHOOK_PASSWORD` are required (or `WEEBHOOK_*`).

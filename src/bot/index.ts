@@ -7,7 +7,7 @@ import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 import { SUPPORTED_EVENT_TYPES } from "../events";
 import { isKnownEventType } from "../webhook-auth";
-import { getSubscriptions, subscribe, unsubscribe } from "../subscriptions";
+import { getSubscriptions, subscribe, unsubscribe, subscribeAll, unsubscribeAll } from "../subscriptions";
 import {
   getWelcomeMessage,
   getEventsListMessage,
@@ -16,16 +16,22 @@ import {
   getSubscribeUnknownEvent,
   getSubscribeSuccess,
   getSubscribeAlready,
+  getSubscribeAllSuccess,
+  getSubscribeAllAlready,
   getUnsubscribeUsage,
   getUnsubscribePrompt,
   getUnsubscribeUnknownEvent,
   getUnsubscribeSuccess,
   getUnsubscribeNotSubscribed,
+  getUnsubscribeAllSuccess,
+  getUnsubscribeAllEmpty,
   getListEmpty,
   getListSubscriptions,
   getAccessDenied,
   getUnsubscribeEmpty,
   getMenuHint,
+  getStatusOk,
+  getHelpMessage,
 } from "../messages";
 import {
   getMainMenuKeyboard,
@@ -77,10 +83,17 @@ function handleList(config: AppConfig) {
 function handleSubscribe(config: AppConfig) {
   return withAuth(config, async (ctx) => {
     const rawText = ctx.message?.text ?? "";
-    const event =
-      rawText === MENU_BUTTONS.SUBSCRIBE
-        ? undefined
+    const isSubscribeAllButton = rawText === MENU_BUTTONS.SUBSCRIBE_ALL;
+    const event = rawText === MENU_BUTTONS.SUBSCRIBE
+      ? undefined
+      : isSubscribeAllButton
+        ? "all"
         : rawText.split(/\s+/)[1]?.trim();
+    if (event === "all") {
+      const count = await subscribeAll(ctx.from!.id.toString());
+      const text = count > 0 ? getSubscribeAllSuccess(count) : getSubscribeAllAlready();
+      return ctx.reply(text, { parse_mode: "HTML", ...withMenu() });
+    }
     if (event) {
       if (!isKnownEventType(event)) {
         return ctx.reply(getSubscribeUnknownEvent(), { ...withMenu() });
@@ -99,10 +112,17 @@ function handleSubscribe(config: AppConfig) {
 function handleUnsubscribe(config: AppConfig) {
   return withAuth(config, async (ctx) => {
     const rawText = ctx.message?.text ?? "";
-    const event =
-      rawText === MENU_BUTTONS.UNSUBSCRIBE
-        ? undefined
+    const isUnsubscribeAllButton = rawText === MENU_BUTTONS.UNSUBSCRIBE_ALL;
+    const event = rawText === MENU_BUTTONS.UNSUBSCRIBE
+      ? undefined
+      : isUnsubscribeAllButton
+        ? "all"
         : rawText.split(/\s+/)[1]?.trim();
+    if (event === "all") {
+      const count = await unsubscribeAll(ctx.from!.id.toString());
+      const text = count > 0 ? getUnsubscribeAllSuccess(count) : getUnsubscribeAllEmpty();
+      return ctx.reply(text, { parse_mode: "HTML", ...withMenu() });
+    }
     if (event) {
       if (!isKnownEventType(event)) {
         return ctx.reply(getUnsubscribeUnknownEvent(), { ...withMenu() });
@@ -128,12 +148,39 @@ function handleUnsubscribe(config: AppConfig) {
   });
 }
 
+function handleStatus(config: AppConfig, webhookPort: number) {
+  return withAuth(config, async (ctx) => {
+    const webhookOk = true;
+    let botOk = true;
+    try {
+      await ctx.telegram.getMe();
+    } catch {
+      botOk = false;
+    }
+    const text = getStatusOk(webhookOk, botOk) + `\n\n🌐 Webhook: <code>http://localhost:${webhookPort}/</code>`;
+    return ctx.reply(text, { parse_mode: "HTML", ...withMenu() });
+  });
+}
+
+function handleHelp(config: AppConfig) {
+  return withAuth(config, (ctx) =>
+    ctx.reply(getHelpMessage(), { parse_mode: "HTML", ...withMenu() })
+  );
+}
+
 /** Action routes: command + menu button → same handler */
 const ROUTES = [
   { command: "events", button: MENU_BUTTONS.EVENTS, handler: handleEvents },
   { command: "list", button: MENU_BUTTONS.LIST, handler: handleList },
   { command: "subscribe", button: MENU_BUTTONS.SUBSCRIBE, handler: handleSubscribe },
   { command: "unsubscribe", button: MENU_BUTTONS.UNSUBSCRIBE, handler: handleUnsubscribe },
+  { command: "status", button: MENU_BUTTONS.STATUS, handler: (c: AppConfig) => handleStatus(c, c.port) },
+  { command: "help", button: MENU_BUTTONS.HELP, handler: handleHelp },
+] as const;
+
+const EXTRA_BUTTONS = [
+  { button: MENU_BUTTONS.SUBSCRIBE_ALL, handler: handleSubscribe },
+  { button: MENU_BUTTONS.UNSUBSCRIBE_ALL, handler: handleUnsubscribe },
 ] as const;
 
 export function createBot(config: AppConfig): Telegraf {
@@ -149,6 +196,9 @@ export function createBot(config: AppConfig): Telegraf {
 
   for (const { command, button, handler } of ROUTES) {
     bot.command(command, handler(config) as Parameters<Telegraf["command"]>[1]);
+    bot.hears(button, handler(config) as Parameters<Telegraf["hears"]>[1]);
+  }
+  for (const { button, handler } of EXTRA_BUTTONS) {
     bot.hears(button, handler(config) as Parameters<Telegraf["hears"]>[1]);
   }
 
@@ -196,6 +246,10 @@ export function createBot(config: AppConfig): Telegraf {
       MENU_BUTTONS.LIST,
       MENU_BUTTONS.SUBSCRIBE,
       MENU_BUTTONS.UNSUBSCRIBE,
+      MENU_BUTTONS.SUBSCRIBE_ALL,
+      MENU_BUTTONS.UNSUBSCRIBE_ALL,
+      MENU_BUTTONS.STATUS,
+      MENU_BUTTONS.HELP,
     ].includes(text);
     if (isMenuButton) return next();
     return ctx.reply(getMenuHint(), { parse_mode: "HTML", ...withMenu() });

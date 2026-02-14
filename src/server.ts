@@ -16,6 +16,13 @@ import {
   formatEventMessage,
   getIpFromEvent,
 } from "./messages";
+import { isInQuietHours, passesSeverityFilter } from "./notification-filter";
+import {
+  addToBuffer,
+  formatGroupedMessage,
+  groupByType,
+  type PendingNotification,
+} from "./notification-buffer";
 import {
   configureDeduplication,
   shouldNotify,
@@ -23,6 +30,7 @@ import {
 } from "./deduplication";
 import { loadEnv, loadConfig } from "./config";
 import {
+  configureLogLevel,
   logServerStart,
   logBotStart,
   logEventReceived,
@@ -42,6 +50,7 @@ import {
 const env = loadEnv();
 const config = loadConfig(env);
 
+configureLogLevel(env);
 configureDeduplication(env);
 startCleanupInterval();
 
@@ -69,6 +78,22 @@ async function notifySubscribers(ev: WebhookEvent): Promise<void> {
       return;
     }
   }
+  if (!passesSeverityFilter(ev.type, config.minSeverity)) {
+    logEventSkipped({
+      msgType: "event_skipped_severity",
+      trigger: ev.type,
+      ip: sourceIp,
+    });
+    return;
+  }
+  if (isInQuietHours(config.quietHoursStart, config.quietHoursEnd)) {
+    logEventSkipped({
+      msgType: "event_skipped_quiet_hours",
+      trigger: ev.type,
+      ip: sourceIp,
+    });
+    return;
+  }
   if (!shouldNotify(ev, getIpFromEvent)) {
     logEventSkipped({
       msgType: "event_deduplicated",
@@ -83,6 +108,37 @@ async function notifySubscribers(ev: WebhookEvent): Promise<void> {
       msgType: "event_skipped_no_subscribers",
       trigger: ev.type,
       ip: sourceIp,
+    });
+    return;
+  }
+  const groupWindow = config.notificationGroupWindowSeconds;
+  if (groupWindow > 0) {
+    addToBuffer(ev, userIds, groupWindow, async (items: PendingNotification[]) => {
+      const grouped = groupByType(items);
+      for (const [eventType, { events, userIds: uids }] of grouped) {
+        const text = formatGroupedMessage(events);
+        for (const userId of uids) {
+          try {
+            await bot.telegram.sendMessage(userId, text, { parse_mode: "HTML" });
+            logTelegramSent({
+              level: "info",
+              msgType: "event_notification",
+              trigger: eventType,
+              ip: getIpFromEvent(events[events.length - 1]),
+              userId,
+            });
+          } catch (e) {
+            logTelegramSent({
+              level: "error",
+              msgType: "event_notification",
+              trigger: eventType,
+              ip: getIpFromEvent(events[events.length - 1]),
+              userId,
+            });
+            console.error("Telegram send error for user", userId, e);
+          }
+        }
+      }
     });
     return;
   }
@@ -118,7 +174,21 @@ const server = Bun.serve({
     const method = req.method;
     const path = url.pathname || "/";
 
-    console.log("[webhook] %s %s", method, path);
+    const isHealthCheck = (method === "GET" && (isRoot || url.pathname === "/health"));
+    if (!isHealthCheck) {
+      console.log("[webhook] %s %s", method, path);
+    }
+
+    if (useTelegramWebhook && telegramWebhookPath && path === telegramWebhookPath && method === "POST") {
+      try {
+        const body = await req.json();
+        await bot.handleUpdate(body);
+        return new Response("OK", { status: 200 });
+      } catch (err) {
+        console.error("[bot] Webhook error:", err);
+        return new Response("Internal Server Error", { status: 500 });
+      }
+    }
 
     if (isRoot && method === "POST") {
       const rawBody = await req.text();
@@ -196,11 +266,29 @@ const server = Bun.serve({
 });
 
 logServerStart(server.port ?? config.port);
-bot.launch().then(() => {
+
+const useTelegramWebhook = !!config.telegramWebhookUrl;
+const telegramWebhookPath = config.telegramWebhookUrl
+  ? (new URL(config.telegramWebhookUrl).pathname || "/telegram-webhook")
+  : "";
+
+if (useTelegramWebhook) {
+  (async () => {
+    try {
+      await bot.telegram.setWebhook(config.telegramWebhookUrl!);
+      console.log("[bot] Telegram webhook set:", config.telegramWebhookUrl);
+    } catch (err) {
+      console.error("[bot] Failed to set webhook:", err);
+    }
+  })();
   logBotStart();
-}).catch((err) => {
-  console.error("Telegram bot failed to start (invalid token?). Webhook still active.", err.message);
-});
+} else {
+  bot.launch().then(() => {
+    logBotStart();
+  }).catch((err) => {
+    console.error("Telegram bot failed to start (invalid token?). Webhook still active.", err.message);
+  });
+}
 
 process.once("SIGINT", async () => {
   bot.stop("SIGINT");

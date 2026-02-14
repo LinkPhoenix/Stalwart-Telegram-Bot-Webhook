@@ -20,3 +20,11 @@ export function getUnsubscribeSuccess(event: string): string {
 export function getUnsubscribeNotSubscribed(event: string): string {
   return `ℹ️ You were not subscribed to: <code>${event}</code>`;
 }
+
+export function getUnsubscribeAllSuccess(count: number): string {
+  return `✅ Unsubscribed from <b>${count}</b> event type(s).`;
+}
+
+export function getUnsubscribeAllEmpty(): string {
+  return "📭 You had no subscriptions.";
+}

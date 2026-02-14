@@ -27,3 +27,7 @@ export function getSubscribeSuccess(event: string): string {
 export function getSubscribeAlready(event: string): string {
   return `ℹ️ Already subscribed to: <code>${event}</code>`;
 }
+
+export function getSubscribeAllSuccess(count: number): string {
+  return `✅ Subscribed to <b>${count}</b> event type(s). You will receive all notifications.`;
+}

@@ -6,6 +6,10 @@ export const MENU_BUTTONS = {
   LIST: "📌 My subscriptions",
   SUBSCRIBE: "➕ Subscribe",
   UNSUBSCRIBE: "➖ Unsubscribe",
+  SUBSCRIBE_ALL: "➕ Subscribe all",
+  UNSUBSCRIBE_ALL: "➖ Unsubscribe all",
+  STATUS: "📊 Status",
+  HELP: "❓ Help",
 } as const;
 
 export const CALLBACK_PREFIX_SUB = "sub:";
@@ -21,6 +25,8 @@ export function getMainMenuKeyboard() {
   return Markup.keyboard([
     [MENU_BUTTONS.EVENTS, MENU_BUTTONS.LIST],
     [MENU_BUTTONS.SUBSCRIBE, MENU_BUTTONS.UNSUBSCRIBE],
+    [MENU_BUTTONS.SUBSCRIBE_ALL, MENU_BUTTONS.UNSUBSCRIBE_ALL],
+    [MENU_BUTTONS.STATUS, MENU_BUTTONS.HELP],
   ])
     .resize(true)
     .oneTime(false)

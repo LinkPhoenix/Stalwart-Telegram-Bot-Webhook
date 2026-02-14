@@ -1,14 +1,37 @@
 /**
  * Structured logging for webhook events and Telegram notifications.
+ * LOG_LEVEL: debug | info | warn | error (default: info)
  */
 
-export type LogLevel = "info" | "warn" | "error";
+export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export type TelegramMessageType =
   | "event_notification"
   | "event_ignored_ip"
   | "event_deduplicated"
-  | "event_skipped_no_subscribers";
+  | "event_skipped_no_subscribers"
+  | "event_skipped_quiet_hours"
+  | "event_skipped_severity";
+
+const LEVEL_ORDER: Record<LogLevel, number> = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3,
+};
+
+let minLevel: LogLevel = "info";
+
+export function configureLogLevel(env: Record<string, string>): void {
+  const raw = (env["LOG_LEVEL"] ?? "info").trim().toLowerCase();
+  if (["debug", "info", "warn", "error"].includes(raw)) {
+    minLevel = raw as LogLevel;
+  }
+}
+
+function shouldLog(level: LogLevel): boolean {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[minLevel];
+}
 
 function formatLog(
   level: LogLevel,
@@ -23,6 +46,7 @@ function formatLog(
 }
 
 function log(level: LogLevel, context: string, data: Record<string, string | number | undefined | null>): void {
+  if (!shouldLog(level)) return;
   const msg = formatLog(level, context, data);
   switch (level) {
     case "error":

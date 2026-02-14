@@ -7,6 +7,7 @@ import mysql from "mysql2/promise";
 import type { DatabaseConfig } from "../config";
 import type { WebhookEvent } from "../webhook-auth";
 import { getIpFromEvent } from "../messages";
+import { SUPPORTED_EVENT_TYPES } from "../events";
 
 let pool: mysql.Pool | null = null;
 
@@ -222,6 +223,38 @@ export async function getAllSubscribersForEvent(
     [eventType]
   );
   return rows.map((r) => r.user_id);
+}
+
+export async function subscribeAll(userId: string): Promise<number> {
+  if (!pool) return 0;
+  let added = 0;
+  for (const eventType of SUPPORTED_EVENT_TYPES) {
+    try {
+      const [result] = await (
+        await getPool()
+      ).execute(
+        "INSERT IGNORE INTO subscriptions (user_id, event_type, created_at) VALUES (?, ?, NOW(6))",
+        [userId, eventType]
+      );
+      if ((result as mysql.ResultSetHeader).affectedRows === 1) added++;
+    } catch {
+      /* skip */
+    }
+  }
+  return added;
+}
+
+export async function unsubscribeAll(userId: string): Promise<number> {
+  if (!pool) return 0;
+  try {
+    const [result] = await (
+      await getPool()
+    ).execute("DELETE FROM subscriptions WHERE user_id = ?", [userId]);
+    return (result as mysql.ResultSetHeader).affectedRows;
+  } catch (err) {
+    console.error("[db] unsubscribeAll error:", err);
+    return 0;
+  }
 }
 
 export async function closeDatabase(): Promise<void> {

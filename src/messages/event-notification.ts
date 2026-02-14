@@ -96,6 +96,17 @@ const EVENT_TEMPLATES: Record<string, EventTemplate> = {
       { label: "Remote port", getValue: (d) => safePort(d.remotePort) },
     ],
   },
+  "auth.error": {
+    title: "⚠️ <b>Auth error</b>",
+    fields: [
+      { label: "Details", getValue: (d) => safeStr(d.details ?? d.error) },
+      { label: "Span ID", getValue: (d) => safeStr(d.spanId) },
+      { label: "Listener", getValue: (d) => safeStr(d.listenerId) },
+      { label: "Local port", getValue: (d) => safePort(d.localPort) },
+      { label: "Remote IP", getValue: (d) => safeStr(d.remoteIp) },
+      { label: "Remote port", getValue: (d) => safePort(d.remotePort) },
+    ],
+  },
   "server.startup": {
     title: "🚀 <b>Server starting</b>",
     fields: [{ label: "Version", getValue: (d) => safeStr(d.version) }],
@@ -128,6 +139,42 @@ const EVENT_TEMPLATES: Record<string, EventTemplate> = {
       { label: "Queue", getValue: (d) => safeStr(d.queueName) },
       { label: "Span ID", getValue: (d) => safeStr(d.spanId) },
       { label: "Total", getValue: (d) => safeStr(d.total) },
+    ],
+  },
+  "delivery.failed": {
+    title: "❌ <b>Delivery failed</b>",
+    sectionName: "Delivery details",
+    fields: [
+      { label: "Error", getValue: (d) => safeStr(d.error ?? d.details) },
+      { label: "From", getValue: (d) => safeStr(d.from) },
+      { label: "To", getValue: (d) => safeTo(d.to ?? d.recipient) },
+      { label: "Remote IP", getValue: (d) => safeStr(d.remoteIp ?? d.ip ?? d.source_ip) },
+      { label: "Span ID", getValue: (d) => safeStr(d.spanId) },
+      { label: "Message ID", getValue: (d) => safeStr(d.messageId) },
+    ],
+  },
+  "security.abuse-ban": {
+    title: "🚫 <b>Security — Abuse ban</b>",
+    fields: [
+      { label: "Reason", getValue: (d) => safeStr(d.reason ?? d.details) },
+      { label: "Remote IP", getValue: (d) => safeStr(d.remoteIp ?? d.ip ?? d.source_ip) },
+      { label: "Account", getValue: (d) => safeStr(d.accountName) },
+    ],
+  },
+  "security.authentication-ban": {
+    title: "🚫 <b>Security — Authentication ban</b>",
+    fields: [
+      { label: "Account", getValue: (d) => safeStr(d.accountName) },
+      { label: "Remote IP", getValue: (d) => safeStr(d.remoteIp ?? d.ip ?? d.source_ip) },
+      { label: "Reason", getValue: (d) => safeStr(d.reason ?? d.details) },
+    ],
+  },
+  "server.startup-error": {
+    title: "💥 <b>Server startup error</b>",
+    sectionName: "Error details",
+    fields: [
+      { label: "Error", getValue: (d) => safeStr(d.error ?? d.details ?? d.message) },
+      { label: "Details", getValue: (d) => safeStr(d.details ?? d.message) },
     ],
   },
 };

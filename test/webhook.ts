@@ -53,8 +53,12 @@ const SAMPLE_DATA: Record<string, Record<string, unknown>> = {
     remotePort: 12345,
   },
   "auth.error": {
-    remoteIp: "192.0.2.1",
-    error: "TLS handshake failed",
+    details: "Authentication mechanism not supported.",
+    spanId: 291057715164981100,
+    listenerId: "pop3",
+    localPort: 110,
+    remoteIp: "118.193.69.177",
+    remotePort: 50428,
   },
   "security.ip-blocked": {
     listenerId: "smtp",
@@ -81,12 +85,16 @@ const SAMPLE_DATA: Record<string, Record<string, unknown>> = {
   "delivery.failed": {
     remoteIp: "142.250.185.46",
     error: "550 Mailbox unavailable",
+    from: "sender@example.com",
+    recipient: "dest@example.com",
+    messageId: "msg-fail-001",
   },
   "server.startup": {
     version: "v0.15.0",
   },
   "server.startup-error": {
     error: "Configuration parse error",
+    details: "Invalid syntax in config.toml line 42",
   },
 };
 
@@ -117,7 +125,7 @@ async function main() {
 
   if (!username || !password || !key) {
     console.error(
-      "Missing in .env: WEBHOOK_USERNAME/WEEBHOOK_USERNAME, WEBHOOK_PASSWORD/WEEBHOOK_PASSWORD, WEBHOOK_KEY/WEEBHOOK_KEY"
+      "Missing in .env: WEBHOOK_KEY, WEBHOOK_USERNAME, WEBHOOK_PASSWORD (WEEBHOOK_* also supported)"
     );
     process.exit(1);
   }

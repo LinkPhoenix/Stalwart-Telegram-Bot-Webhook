@@ -3,6 +3,8 @@
  * Uses MariaDB/MySQL when DATABASE_USE=true, otherwise local JSON file.
  */
 
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { SUPPORTED_EVENT_TYPES, type EventType } from "./events";
 import {
   isDatabaseActive,
@@ -10,6 +12,8 @@ import {
   subscribe as dbSubscribe,
   unsubscribe as dbUnsubscribe,
   getAllSubscribersForEvent as dbGetAllSubscribersForEvent,
+  subscribeAll as dbSubscribeAll,
+  unsubscribeAll as dbUnsubscribeAll,
 } from "./db";
 
 const SUBSCRIPTIONS_FILE = process.env.SUBSCRIPTIONS_FILE ?? "subscriptions.json";
@@ -27,10 +31,21 @@ async function load(): Promise<void> {
     data = typeof parsed === "object" && parsed !== null ? parsed : {};
   } catch {
     data = {};
+    try {
+      await save();
+    } catch {
+      /* ignore — will retry on next save */
+    }
   }
 }
 
 async function save(): Promise<void> {
+  try {
+    const dir = dirname(SUBSCRIPTIONS_FILE);
+    await mkdir(dir, { recursive: true });
+  } catch {
+    /* dir may already exist */
+  }
   await Bun.write(SUBSCRIPTIONS_FILE, JSON.stringify(data, null, 2));
 }
 
@@ -89,6 +104,39 @@ export async function getAllSubscribersForEvent(
     if (events.includes(eventType as EventType)) userIds.push(userId);
   }
   return userIds;
+}
+
+export async function subscribeAll(userId: string): Promise<number> {
+  if (isDatabaseActive()) {
+    return dbSubscribeAll(userId);
+  }
+  await load();
+  const current = data[userId] ?? [];
+  let added = 0;
+  for (const eventType of SUPPORTED_EVENT_TYPES) {
+    if (!current.includes(eventType as EventType)) {
+      current.push(eventType as EventType);
+      added++;
+    }
+  }
+  if (added > 0) {
+    data[userId] = current;
+    await save();
+  }
+  return added;
+}
+
+export async function unsubscribeAll(userId: string): Promise<number> {
+  if (isDatabaseActive()) {
+    return dbUnsubscribeAll(userId);
+  }
+  await load();
+  const current = data[userId];
+  if (!current?.length) return 0;
+  const count = current.length;
+  delete data[userId];
+  await save();
+  return count;
 }
 
 export { SUPPORTED_EVENT_TYPES };

@@ -8,7 +8,8 @@ RUN bun install --frozen-lockfile
 
 # Copy source and data files
 COPY src ./src
-COPY subscriptions.json ./
+# subscriptions.json may be gitignored; use default empty file (bot creates it at SUBSCRIPTIONS_FILE at runtime)
+COPY subscriptions.json.default ./subscriptions.json
 
 # Expose webhook server port
 EXPOSE 3000

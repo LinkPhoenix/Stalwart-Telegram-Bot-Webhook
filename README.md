@@ -67,12 +67,12 @@ Requests to `POST /` are protected by **two mechanisms** (both required):
 1. **HMAC-SHA256 signature**  
    - Header: `X-Signature`.  
    - Value: HMAC-SHA256 of the **raw body** (JSON), **base64**-encoded.  
-   - Key: `WEEBHOOK_KEY` (used as UTF-8 by Stalwart; the code also accepts a hex key for the test script).  
+   - Key: `WEBHOOK_KEY` (used as UTF-8 by Stalwart; the code also accepts a hex key for the test script).  
    - Ensures the body is unmodified and comes from someone who knows the key.
 
 2. **HTTP Basic authentication**  
    - Header: `Authorization: Basic <base64(username:password)>`.  
-   - Credentials: `WEEBHOOK_USERNAME` and `WEEBHOOK_PASSWORD`, matching `auth.username` and `auth.secret` in the Stalwart webhook config.  
+   - Credentials: `WEBHOOK_USERNAME` and `WEBHOOK_PASSWORD`, matching `auth.username` and `auth.secret` in the Stalwart webhook config.  
    - Restricts access to the endpoint to authorized clients only.
 
 If the signature is invalid or Basic Auth is wrong, the server responds with **401 Unauthorized** and does not send any notification. The body is parsed only after validation.
@@ -93,12 +93,18 @@ If the signature is invalid or Basic Auth is wrong, the server responds with **4
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token (from [@BotFather](https://t.me/BotFather)). **Required.** |
 | `TELEGRAM_TEST_ENV` | (Optional) Set to `true` or `1` if the bot uses Telegram’s **test environment** (test API). |
 | `ALLOWED_USER_ID` | (Optional) Single Telegram user ID allowed to use the bot; if empty, anyone can use it. |
-| `WEEBHOOK_ID` | (Optional) Webhook identifier (informational). |
-| `WEEBHOOK_URL` | (Optional) URL where Stalwart sends events (e.g. `https://mail.example.com/`). Used by the test script when no URL is passed. |
-| `WEEBHOOK_KEY` | HMAC key to sign requests (same as `signature-key` in Stalwart). **Required for the webhook.** |
-| `WEEBHOOK_USERNAME` | Username for HTTP Basic Auth (same as `auth.username` in Stalwart). **Required for the webhook.** |
-| `WEEBHOOK_PASSWORD` | Password for HTTP Basic Auth (same as `auth.secret` in Stalwart). **Required for the webhook.** |
+| `WEBHOOK_ID` | (Optional) Webhook identifier (informational). `WEEBHOOK_ID` also supported. |
+| `WEBHOOK_URL` | (Optional) URL where Stalwart sends events (e.g. `https://mail.example.com/`). Used by the test script. `WEEBHOOK_URL` also supported. |
+| `WEBHOOK_KEY` | HMAC key to sign requests (same as `signature-key` in Stalwart). **Required.** `WEEBHOOK_KEY` also supported. |
+| `WEBHOOK_USERNAME` | Username for HTTP Basic Auth (same as `auth.username` in Stalwart). **Required.** `WEEBHOOK_USERNAME` also supported. |
+| `WEBHOOK_PASSWORD` | Password for HTTP Basic Auth (same as `auth.secret` in Stalwart). **Required.** `WEEBHOOK_PASSWORD` also supported. |
 | `PORT` | (Optional) HTTP server port. Default: `3000`. |
+| `LOG_LEVEL` | (Optional) Logging level: `debug`, `info`, `warn`, `error`. Default: `info`. |
+| `SUBSCRIPTION_MIN_SEVERITY` | (Optional) Filter by severity: `info` (all), `warning` (+warnings), `alert` (critical only). Default: `info`. |
+| `QUIET_HOURS_START` | (Optional) No notifications between start and end (e.g. `22:00`). Requires `QUIET_HOURS_END`. |
+| `QUIET_HOURS_END` | (Optional) End of quiet hours (e.g. `08:00`). |
+| `NOTIFICATION_GROUP_WINDOW_SECONDS` | (Optional) Group similar events in one message. `0` = disabled. |
+| `TELEGRAM_WEBHOOK_URL` | (Optional) Use webhook instead of polling (e.g. `https://example.com/telegram-webhook`). |
 | `SUBSCRIPTIONS_FILE` | (Optional) Path to the subscriptions JSON file. Default: `subscriptions.json` in the working directory. Useful in Docker to persist under a volume (e.g. `/app/data/subscriptions.json`). |
 | **`<TYPE>_IGNORED_IPS`** | (Optional) **One variable per event type**: comma-separated list of IPs to **allowlist** for that event. No notification is sent when the event’s source IP (from `remoteIp`, `ip`, or `source_ip`) is in this list. Variable name: event type with `.` replaced by `_`, uppercase, suffix `_IGNORED_IPS`. Example: `auth.success` → `AUTH_SUCCESS_IGNORED_IPS=1.1.1.1,1.2.2.2`. See [Per-event IP allowlist](#per-event-ip-allowlist). |
 | `DEDUP_ENABLED` | (Optional) Enable deduplication. Default: `true`. Set to `false` to disable. |
@@ -117,7 +123,7 @@ When the database is enabled, the bot stores: **all received events**, **blocked
 
 ## Running the bot
 
-1. Copy `.env.example` to `.env` and set at least `TELEGRAM_BOT_TOKEN`, `WEEBHOOK_KEY`, `WEEBHOOK_USERNAME`, and `WEEBHOOK_PASSWORD`.
+1. Copy `.env.example` to `.env` and set at least `TELEGRAM_BOT_TOKEN`, `WEBHOOK_KEY`, `WEBHOOK_USERNAME`, and `WEBHOOK_PASSWORD`.
 2. Install dependencies and start:
    ```bash
    bun install
@@ -217,8 +223,14 @@ Full list of variable names (each is optional):
 - **`/start`** — Welcome message and command overview.
 - **`/events`** — List of available event types.
 - **`/subscribe <event>`** — Subscribe to an event (e.g. `/subscribe auth.success`).
+- **`/subscribe all`** — Subscribe to all event types.
 - **`/unsubscribe <event>`** — Unsubscribe from an event.
+- **`/unsubscribe all`** — Unsubscribe from all events.
 - **`/list`** — Show your current subscriptions.
+- **`/status`** — Check bot and webhook status.
+- **`/help`** — Detailed help with examples.
+
+All commands are also available via the menu buttons.
 
 If `ALLOWED_USER_ID` is set, only that Telegram user can use the bot; others receive “Access denied.”
 
@@ -257,7 +269,7 @@ bun run test:webhook https://mail.example.com/
 bun run test:webhook https://mail.example.com/ -- auth.success
 ```
 
-The script uses `WEEBHOOK_KEY`, `WEEBHOOK_USERNAME`, and `WEEBHOOK_PASSWORD` from `.env` to sign and authenticate the request.
+The script uses `WEBHOOK_KEY` (or `WEEBHOOK_KEY`), `WEBHOOK_USERNAME`, and `WEBHOOK_PASSWORD` from `.env` to sign and authenticate the request.
 
 All test scripts are grouped in the [`test/`](test/) folder.
 
@@ -273,7 +285,7 @@ If you run the bot **on your own machine at home** and want Stalwart (e.g. on a 
 2. **Forward the port on your router**  
    Configure **port forwarding** (NAT) on your router so that **external port 3000** (or the port you use) is forwarded to the **local IP and port** of the machine running the bot (e.g. `192.168.1.10:3000`). That way, when Stalwart sends a request to `http://<your-public-ip>:3000/`, the router will send it to your machine.
 
-Then set `WEEBHOOK_URL` (and the Stalwart webhook `url`) to your public URL, for example `http://YOUR_PUBLIC_IP:3000/`. If your public IP changes (e.g. with a dynamic ISP), consider using a dynamic DNS hostname instead.
+Then set `WEBHOOK_URL` (and the Stalwart webhook `url`) to your public URL, for example `http://YOUR_PUBLIC_IP:3000/`. If your public IP changes (e.g. with a dynamic ISP), consider using a dynamic DNS hostname instead.
 
 ---
 
@@ -281,14 +293,14 @@ Then set `WEEBHOOK_URL` (and the Stalwart webhook `url`) to your public URL, for
 
 The server exposes:
 
-- **`POST /`** — Endpoint to configure in Stalwart (same URL as `WEEBHOOK_URL`). HMAC (`X-Signature`) and Basic Auth are required.
+- **`POST /`** — Endpoint to configure in Stalwart (same URL as `WEBHOOK_URL`). HMAC (`X-Signature`) and Basic Auth are required.
 - **`GET /`** and **`GET /health`** — Health check (returns `200 OK`).
 
 On your Stalwart server, configure the webhook with:
 
-- **`signature-key`** = `WEEBHOOK_KEY`
-- **`auth.username`** = `WEEBHOOK_USERNAME`
-- **`auth.secret`** = `WEEBHOOK_PASSWORD`
+- **`signature-key`** = `WEBHOOK_KEY`
+- **`auth.username`** = `WEBHOOK_USERNAME`
+- **`auth.secret`** = `WEBHOOK_PASSWORD`
 - **`url`** = Your instance URL (e.g. `https://mail.example.com/` or `http://localhost:3000/`)
 
 Ensure **subscriptions** are persisted (e.g. volume in Docker or a durable path for `SUBSCRIPTIONS_FILE`) so user subscriptions survive restarts.

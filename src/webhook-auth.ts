@@ -23,7 +23,8 @@ export interface WebhookEvent {
  *
  * auth.success: { accountName, accountId, spanId, listenerId, localPort, remoteIp, remotePort }
  * auth.failed:  { remoteIp, accountName, id, spanId, listenerId, localPort, remotePort }
- * auth.error, delivery.completed, delivery.failed, server.startup-error: structure varies
+ * auth.error:   { details, spanId, listenerId, localPort, remoteIp, remotePort }
+ * delivery.completed, delivery.failed, server.startup-error: structure varies
  */
 
 export interface WebhookEventsPayload {

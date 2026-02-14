@@ -18,10 +18,8 @@ services:
       - DATABASE_USER=${DATABASE_USER:-stalwart}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
     volumes:
-      # Persist subscriptions across restarts (used when DB is disabled)
+      # Persist subscriptions across restarts (bot creates subscriptions.json if missing)
       - stalwart-data:/app/data
-      # Use project subscriptions.json so subscriptions persist with the repo
-      - ./subscriptions.json:/app/data/subscriptions.json
     depends_on:
       mariadb:
         condition: service_healthy
