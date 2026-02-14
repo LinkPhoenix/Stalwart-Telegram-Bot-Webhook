@@ -1,0 +1,55 @@
+services:
+  tb-stalwart:
+    build: .
+    container_name: tb-stalwart
+    restart: unless-stopped
+    env_file:
+      - stack.env
+    networks:
+      - stalwart-net
+    environment:
+      - PORT=3000
+      - SUBSCRIPTIONS_FILE=/app/data/subscriptions.json
+      # Database (optional): set DATABASE_USE=true and DATABASE=mariadb in .env
+      # Then run: docker compose --profile db up -d
+      - DATABASE_HOST=mariadb
+      - DATABASE_PORT=3306
+      - DATABASE_NAME=${DATABASE_NAME:-stalwart_bot}
+      - DATABASE_USER=${DATABASE_USER:-stalwart}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
+    volumes:
+      # Persist subscriptions across restarts (used when DB is disabled)
+      - stalwart-data:/app/data
+      # Use project subscriptions.json so subscriptions persist with the repo
+      - ./subscriptions.json:/app/data/subscriptions.json
+    depends_on:
+      mariadb:
+        condition: service_healthy
+        required: false
+
+  mariadb:
+    image: mariadb:11
+    container_name: tb-stalwart-db
+    restart: unless-stopped
+    profiles:
+      - db
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD:-root}
+      MARIADB_DATABASE: ${DATABASE_NAME:-stalwart_bot}
+      MARIADB_USER: ${DATABASE_USER:-stalwart}
+      MARIADB_PASSWORD: ${DATABASE_PASSWORD:-}
+    volumes:
+      - stalwart-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  stalwart-data:
+  stalwart-db-data:
+
+networks:
+  stalwart-net:
+    driver: bridge
