@@ -1,30 +1,33 @@
 /**
  * Messages for /unsubscribe command.
  */
-export function getUnsubscribeUsage(): string {
-  return "Usage: /unsubscribe <event>";
+import type { Locale } from "../i18n";
+import { t, tReplace } from "../i18n";
+
+export function getUnsubscribeUsage(locale?: Locale): string {
+  return t(locale ?? "en", "unsubscribe.usage");
 }
 
-export function getUnsubscribePrompt(): string {
-  return "Select an event to unsubscribe from:";
+export function getUnsubscribePrompt(locale?: Locale): string {
+  return t(locale ?? "en", "unsubscribe.prompt");
 }
 
-export function getUnsubscribeUnknownEvent(): string {
-  return "Unknown event. Use /events for the list.";
+export function getUnsubscribeUnknownEvent(locale?: Locale): string {
+  return t(locale ?? "en", "unsubscribe.unknown");
 }
 
-export function getUnsubscribeSuccess(event: string): string {
-  return `✅ Unsubscribed from: <code>${event}</code>`;
+export function getUnsubscribeSuccess(event: string, locale?: Locale): string {
+  return "✅ " + tReplace(locale ?? "en", "unsubscribe.success", { event: `<code>${event}</code>` });
 }
 
-export function getUnsubscribeNotSubscribed(event: string): string {
-  return `ℹ️ You were not subscribed to: <code>${event}</code>`;
+export function getUnsubscribeNotSubscribed(event: string, locale?: Locale): string {
+  return "ℹ️ " + tReplace(locale ?? "en", "unsubscribe.notSubscribed", { event: `<code>${event}</code>` });
 }
 
-export function getUnsubscribeAllSuccess(count: number): string {
-  return `✅ Unsubscribed from <b>${count}</b> event type(s).`;
+export function getUnsubscribeAllSuccess(count: number, locale?: Locale): string {
+  return "✅ " + tReplace(locale ?? "en", "unsubscribe.allSuccess", { count: `<b>${count}</b>` });
 }
 
-export function getUnsubscribeAllEmpty(): string {
-  return "📭 You had no subscriptions.";
+export function getUnsubscribeAllEmpty(locale?: Locale): string {
+  return "📭 " + t(locale ?? "en", "unsubscribe.allEmpty");
 }

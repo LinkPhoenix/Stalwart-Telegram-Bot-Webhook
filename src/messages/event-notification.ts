@@ -1,6 +1,13 @@
 import type { WebhookEvent } from "../webhook-auth";
+import { formatTimestamp as i18nFormatTimestamp, t, type Locale } from "../i18n";
 
 const ABUSEIPDB_BASE = "https://www.abuseipdb.com/check/";
+
+export interface FormatEventOptions {
+  locale?: Locale;
+  timezone?: string;
+  short?: boolean;
+}
 
 /** Internal flag set by test webhook script. Do not display in output. */
 const TEST_DATA_KEY = "_test";
@@ -37,17 +44,8 @@ export function getIpFromEvent(ev: WebhookEvent): string | null {
   return null;
 }
 
-/** Formats ISO date string to English locale (e.g. "Jan 15, 2025, 2:30:45 PM"). */
-function formatTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString("en-US", {
-      dateStyle: "medium",
-      timeStyle: "medium",
-    });
-  } catch {
-    return iso;
-  }
+function formatTimestamp(iso: string, locale: Locale = "en", timezone?: string): string {
+  return i18nFormatTimestamp(iso, locale, timezone);
 }
 
 type EventFieldDef = {
@@ -179,23 +177,56 @@ const EVENT_TEMPLATES: Record<string, EventTemplate> = {
   },
 };
 
-function buildEventTemplate(ev: WebhookEvent, templateKey: string): string {
-  const t = EVENT_TEMPLATES[templateKey];
-  if (!t) return formatGenericEvent(ev);
+function buildEventTemplate(
+  ev: WebhookEvent,
+  templateKey: string,
+  opts: FormatEventOptions = {}
+): string {
+  const tmpl = EVENT_TEMPLATES[templateKey];
+  if (!tmpl) return formatGenericEvent(ev, opts);
+  const locale = opts.locale ?? "en";
+  const tz = opts.timezone;
+  const short = opts.short ?? false;
   const d = ev.data ?? {};
+  const titleKey = `eventTitles.${templateKey}`;
+  const title = t(locale, titleKey) !== titleKey ? t(locale, titleKey) : tmpl.title;
+  const sectionKey = tmpl.sectionName ? "sectionNames.delivery" : "sectionNames.connection";
+  const sectionName = t(locale, sectionKey) !== sectionKey ? t(locale, sectionKey) : (tmpl.sectionName ?? "Connection details");
+  const fields = short ? tmpl.fields.slice(0, 3) : tmpl.fields;
+  const emojiMap: Record<string, string> = {
+    "security.ip-blocked": "🛡️", "auth.success": "✅", "auth.failed": "❌", "auth.error": "⚠️",
+    "server.startup": "🚀", "delivery.delivered": "📬", "delivery.completed": "✅", "delivery.failed": "❌",
+    "security.abuse-ban": "🚫", "security.authentication-ban": "🚫", "server.startup-error": "💥",
+  };
+  const emoji = emojiMap[templateKey] ?? "📬";
+  const eventLabel = t(locale, "notification.event");
+  const dateLabel = t(locale, "notification.date");
+  const refLabel = t(locale, "notification.ref");
   const lines: string[] = [
-    t.title,
+    `${emoji} <b>${title.replace(/<\/?b>/g, "")}</b>`,
     "",
-    `📋 <b>Event</b> · <code>${escapeHtml(ev.type)}</code>`,
-    `🕐 <b>Date</b> · ${escapeHtml(formatTimestamp(ev.createdAt))}`,
-    `🆔 <b>Ref.</b> · <code>${escapeHtml(ev.id)}</code>`,
+    `📋 <b>${eventLabel}</b> · <code>${escapeHtml(ev.type)}</code>`,
+    `🕐 <b>${dateLabel}</b> · ${escapeHtml(formatTimestamp(ev.createdAt, locale, tz))}`,
+    `🆔 <b>${refLabel}</b> · <code>${escapeHtml(ev.id)}</code>`,
     "",
-    `━━━ ${t.sectionName ?? "Connection details"} ━━━`,
-    ...t.fields.map((f) => `• ${f.label} · <code>${escapeHtml(f.getValue(d))}</code>`),
+    `━━━ ${sectionName} ━━━`,
+    ...fields.map((f) => {
+      const keyMap: Record<string, string> = {
+        "Listener": "listener", "Local port": "localPort", "Remote IP": "remoteIp", "Remote port": "remotePort",
+        "Account": "account", "Account ID": "accountId", "Span ID": "spanId", "ID": "id", "Details": "details",
+        "Version": "version", "Error": "error", "Reason": "reason", "From": "from", "To": "to",
+        "Hostname": "hostname", "Code": "code", "Size": "size", "Elapsed (ms)": "elapsed", "Queue": "queue",
+        "Total": "total", "Message ID": "messageId",
+      };
+      const key = keyMap[f.label] ?? f.label.toLowerCase().replace(/\s+/g, "");
+      const label = t(locale, `eventLabels.${key}`) !== `eventLabels.${key}` ? t(locale, `eventLabels.${key}`) : f.label;
+      return `• ${label} · <code>${escapeHtml(f.getValue(d))}</code>`;
+    }),
   ];
   const ip = getIpFromEvent(ev);
   if (ip) {
-    lines.push("", `🔗 <a href="${ABUSEIPDB_BASE}${encodeURIComponent(ip)}">View on AbuseIPDB</a>`);
+    const abuseLink = t(locale, "notification.viewOnAbuseIPDB");
+    lines.push("", `🔗 <a href="${ABUSEIPDB_BASE}${encodeURIComponent(ip)}">${escapeHtml(abuseLink)}</a>`);
   }
   return lines.join("\n");
 }
@@ -203,11 +234,14 @@ function buildEventTemplate(ev: WebhookEvent, templateKey: string): string {
 /**
  * Generic template for event types without a dedicated template.
  */
-function formatGenericEvent(ev: WebhookEvent): string {
+function formatGenericEvent(ev: WebhookEvent, opts: FormatEventOptions = {}): string {
+  const locale = opts.locale ?? "en";
+  const tz = opts.timezone;
   const ip = getIpFromEvent(ev);
+  const abuseLink = t(locale, "notification.viewOnAbuseIPDB");
   const ipLine =
     ip !== null
-      ? `\n🔗 <a href="${ABUSEIPDB_BASE}${encodeURIComponent(ip)}">AbuseIPDB</a>`
+      ? `\n🔗 <a href="${ABUSEIPDB_BASE}${encodeURIComponent(ip)}">${escapeHtml(abuseLink)}</a>`
       : "";
   const data = ev.data ?? {};
   const filteredData = Object.fromEntries(
@@ -220,7 +254,7 @@ function formatGenericEvent(ev: WebhookEvent): string {
 
   return [
     `📬 <b>${escapeHtml(ev.type)}</b>`,
-    `🕐 ${escapeHtml(formatTimestamp(ev.createdAt))}`,
+    `🕐 ${escapeHtml(formatTimestamp(ev.createdAt, locale, tz))}`,
     `🆔 <code>${escapeHtml(ev.id)}</code>`,
     ipLine,
     dataStr,
@@ -229,14 +263,14 @@ function formatGenericEvent(ev: WebhookEvent): string {
     .join("\n");
 }
 
-const TEST_BANNER = "🧪 <b>TEST</b> — This is a test notification.\n\n";
-
 /**
  * Selects the template by event type and formats the Telegram message (HTML).
  */
-export function formatEventMessage(ev: WebhookEvent): string {
+export function formatEventMessage(ev: WebhookEvent, opts?: FormatEventOptions): string {
   const isTest = ev.data?.[TEST_DATA_KEY] === true;
+  const locale = opts?.locale ?? "en";
   const template = EVENT_TEMPLATES[ev.type];
-  const body = template ? buildEventTemplate(ev, ev.type) : formatGenericEvent(ev);
-  return isTest ? TEST_BANNER + body : body;
+  const body = template ? buildEventTemplate(ev, ev.type, opts ?? {}) : formatGenericEvent(ev, opts ?? {});
+  const testBanner = t(locale, "notification.testBanner");
+  return isTest ? testBanner + body : body;
 }

@@ -1,14 +1,18 @@
 /**
  * Welcome message sent on bot /start.
  */
-export function getWelcomeMessage(): string {
+import type { Locale } from "../i18n";
+import { t } from "../i18n";
+
+export function getWelcomeMessage(locale?: Locale): string {
+  const l = locale ?? "en";
   return (
-    "👋 <b>Welcome to Stalwart Monitor Bot!</b>\n\n" +
-    "📬 This bot keeps you notified of your <a href=\"https://stalw.art\">Stalwart</a> mail server events in real time.\n\n" +
-    "🔔 <b>What you can do:</b>\n" +
-    "• Subscribe to auth, security, delivery & server events\n" +
-    "• Receive instant Telegram alerts when events occur\n" +
-    "• Manage your subscriptions easily via the menu\n\n" +
-    "👇 Use the buttons below to get started!"
+    `👋 <b>${t(l, "welcome.title")}</b>\n\n` +
+    `📬 ${t(l, "welcome.intro").replace(/Stalwart/g, "<a href=\"https://stalw.art\">Stalwart</a>")}\n\n` +
+    `🔔 <b>${t(l, "welcome.features")}</b>\n` +
+    `• ${t(l, "welcome.feature1")}\n` +
+    `• ${t(l, "welcome.feature2")}\n` +
+    `• ${t(l, "welcome.feature3")}\n\n` +
+    `👇 ${t(l, "welcome.cta")}`
   );
 }

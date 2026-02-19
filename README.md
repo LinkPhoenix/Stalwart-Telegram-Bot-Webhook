@@ -2,7 +2,7 @@
 
 # ⚠️ BETA
 
-> **This project is currently in beta.** The documentation is not yet complete, and the project is not yet available on Docker Hub. Use at your own discretion.
+> **This project is currently in beta.** Documentation may be incomplete, and the project is not yet on Docker Hub. Use at your own discretion.
 
 </div>
 
@@ -17,18 +17,16 @@ A Telegram bot that lets users subscribe to events from a [Stalwart](https://sta
 ## Table of contents
 
 - [How it works](#how-it-works)
-- [Architecture](#architecture)
-- [Webhook security](#webhook-security)
 - [Requirements](#requirements)
+- [Quick start](#quick-start)
 - [Environment variables](#environment-variables)
-- [Running the bot](#running-the-bot)
-- [Docker Compose](#docker-compose)
+- [Docker](#docker)
 - [Supported events](#supported-events)
 - [Per-event IP allowlist](#per-event-ip-allowlist)
 - [Telegram commands](#telegram-commands)
 - [Subscriptions](#subscriptions)
-- [Testing the webhook](#testing-the-webhook)
-- [Local testing: opening the webhook port](#local-testing-opening-the-webhook-port)
+- [Testing](#testing)
+- [Local deployment: opening the webhook port](#local-deployment-opening-the-webhook-port)
 - [Deployment](#deployment)
 
 ---
@@ -36,53 +34,32 @@ A Telegram bot that lets users subscribe to events from a [Stalwart](https://sta
 ## How it works
 
 1. **Stalwart** sends events (auth, security, delivery, etc.) as `POST` requests to the configured webhook URL.
-2. The **server** (Bun) receives the request on `POST /`, verifies the **HMAC signature** (`X-Signature`) and **HTTP Basic Auth**, parses the JSON and extracts the event list.
-3. For each recognized event, the server **deduplicates** by `type|IP` (same event from same IP within 60s = one notification). It checks **subscriptions.json** for subscribers. If the event has a per-event IP allowlist and the source IP is in that list, the notification is skipped.
+2. The **server** (Bun) receives the request on `POST /`, verifies the **HMAC signature** (`X-Signature`) and **HTTP Basic Auth** (optional), parses the JSON and extracts the event list.
+3. For each recognized event, the server **deduplicates** by `type|IP` (same event from same IP within 60s = one notification). It checks subscriptions and, if the event has a per-event IP allowlist and the source IP is in that list, the notification is skipped.
 4. The **Telegram bot** sends each subscriber a formatted message (type, date, id, data).
 
-The Telegram bot runs in **polling** mode (no Telegram webhook): it handles user commands (`/start`, `/subscribe`, `/events`, etc.) and manages subscriptions. The HTTP server and the bot run in the same process.
-
----
-
-## Architecture
-
-| File | Role |
-|------|------|
-| **`src/server.ts`** | HTTP server (Bun) + Telegraf bot. Exposes `POST /` (Stalwart webhook), `GET /` and `GET /health`. Receives webhooks, deduplicates events, notifies subscribers (respecting IP allowlists). |
-| **`src/config.ts`** | Loads `.env`, validates required variables, builds per-event ignored-IP map. |
-| **`src/webhook-auth.ts`** | Webhook verification: HMAC-SHA256 of body (`X-Signature`), Basic Auth (`Authorization`), JSON parsing. |
-| **`src/events/registry.ts`** | Central registry of supported event types. Add new events here to enable them for subscriptions. |
-| **`src/deduplication.ts`** | Deduplicates notifications by `type|IP` over a configurable window (default 60s) to avoid multiple messages for the same logical event. |
-| **`src/subscriptions.ts`** | Persists subscriptions per Telegram user in **`subscriptions.json`** (path configurable via `SUBSCRIPTIONS_FILE`). Read/write on each operation. |
-| **`src/messages/`** | Message templates (welcome, event notifications, subscribe/unsubscribe, list). **`getIpFromEvent()`** extracts source IP from event data (`remoteIp`, `ip`, `source_ip`) for notifications and IP allowlist checks. |
-| **`test/webhook.ts`** | Test script: sends a fake POST request (same format as Stalwart) with signature and Basic Auth to verify the server accepts webhooks. |
-| **`subscriptions.json`** | JSON file: `{ "telegram_user_id": ["event.type", ...] }`. Created/updated automatically. With Docker, use a volume or set `SUBSCRIPTIONS_FILE` to a path inside the container (e.g. `/app/data/subscriptions.json`). |
-
----
-
-## Webhook security
-
-Requests to `POST /` are protected by **two mechanisms** (both required):
-
-1. **HMAC-SHA256 signature**  
-   - Header: `X-Signature`.  
-   - Value: HMAC-SHA256 of the **raw body** (JSON), **base64**-encoded.  
-   - Key: `WEBHOOK_KEY` (used as UTF-8 by Stalwart; the code also accepts a hex key for the test script).  
-   - Ensures the body is unmodified and comes from someone who knows the key.
-
-2. **HTTP Basic authentication**  
-   - Header: `Authorization: Basic <base64(username:password)>`.  
-   - Credentials: `WEBHOOK_USERNAME` and `WEBHOOK_PASSWORD`, matching `auth.username` and `auth.secret` in the Stalwart webhook config.  
-   - Restricts access to the endpoint to authorized clients only.
-
-If the signature is invalid or Basic Auth is wrong, the server responds with **401 Unauthorized** and does not send any notification. The body is parsed only after validation.
+The Telegram bot runs in **polling** mode by default (or webhook if `TELEGRAM_WEBHOOK_URL` is set). It handles user commands (`/start`, `/subscribe`, `/events`, etc.) and manages subscriptions. The HTTP server and the bot run in the same process.
 
 ---
 
 ## Requirements
 
 - [Bun](https://bun.sh) **or** [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-- A **`.env`** file at the project root (see [Environment variables](#environment-variables)); you can copy `.env.example` and fill in the values.
+- A **`.env`** file at the project root (copy `.env.example` and fill in the values; see [Environment variables](#environment-variables))
+
+---
+
+## Quick start
+
+1. Copy `.env.example` to `.env` and set at least **`TELEGRAM_BOT_TOKEN`** (from [@BotFather](https://t.me/BotFather)). Optionally set `WEBHOOK_KEY`, `WEBHOOK_USERNAME`, and `WEBHOOK_PASSWORD` for webhook security.
+2. **With Bun:**
+   ```bash
+   bun install
+   bun run start
+   ```
+3. **With Docker:** see [Docker](#docker) below.
+
+The server listens on **port 3000** (or the port set by `PORT`). The bot starts in polling mode.
 
 ---
 
@@ -91,201 +68,167 @@ If the signature is invalid or Basic Auth is wrong, the server responds with **4
 | Variable | Description |
 |----------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token (from [@BotFather](https://t.me/BotFather)). **Required.** |
-| `TELEGRAM_TEST_ENV` | (Optional) Set to `true` or `1` if the bot uses Telegram’s **test environment** (test API). |
+| `TELEGRAM_TEST_ENV` | (Optional) Set to `true` or `1` if the bot uses Telegram’s **test environment**. |
 | `ALLOWED_USER_ID` | (Optional) Single Telegram user ID allowed to use the bot; if empty, anyone can use it. |
-| `WEBHOOK_ID` | (Optional) Webhook identifier (informational). `WEEBHOOK_ID` also supported. |
-| `WEBHOOK_URL` | (Optional) URL where Stalwart sends events (e.g. `https://mail.example.com/`). Used by the test script. `WEEBHOOK_URL` also supported. |
-| `WEBHOOK_KEY` | HMAC key to sign requests (same as `signature-key` in Stalwart). **Required.** `WEEBHOOK_KEY` also supported. |
-| `WEBHOOK_USERNAME` | Username for HTTP Basic Auth (same as `auth.username` in Stalwart). **Required.** `WEEBHOOK_USERNAME` also supported. |
-| `WEBHOOK_PASSWORD` | Password for HTTP Basic Auth (same as `auth.secret` in Stalwart). **Required.** `WEEBHOOK_PASSWORD` also supported. |
+| `WEBHOOK_KEY` | (Optional) HMAC key to sign requests (same as `signature-key` in Stalwart). When set, signature verification is enabled. |
+| `WEBHOOK_USERNAME` | (Optional) Username for HTTP Basic Auth (same as `auth.username` in Stalwart). |
+| `WEBHOOK_PASSWORD` | (Optional) Password for HTTP Basic Auth (same as `auth.secret` in Stalwart). |
 | `PORT` | (Optional) HTTP server port. Default: `3000`. |
 | `LOG_LEVEL` | (Optional) Logging level: `debug`, `info`, `warn`, `error`. Default: `info`. |
-| `SUBSCRIPTION_MIN_SEVERITY` | (Optional) Filter by severity: `info` (all), `warning` (+warnings), `alert` (critical only). Default: `info`. |
-| `QUIET_HOURS_START` | (Optional) No notifications between start and end (e.g. `22:00`). Requires `QUIET_HOURS_END`. |
-| `QUIET_HOURS_END` | (Optional) End of quiet hours (e.g. `08:00`). |
+| `SUBSCRIPTION_MIN_SEVERITY` | (Optional) Filter by severity: `info`, `warning`, `alert`. Default: `info`. |
+| `QUIET_HOURS_START` / `QUIET_HOURS_END` | (Optional) No notifications in this time window (e.g. `22:00`–`08:00`). |
 | `NOTIFICATION_GROUP_WINDOW_SECONDS` | (Optional) Group similar events in one message. `0` = disabled. |
-| `TELEGRAM_WEBHOOK_URL` | (Optional) Use webhook instead of polling (e.g. `https://example.com/telegram-webhook`). |
-| `SUBSCRIPTIONS_FILE` | (Optional) Path to the subscriptions JSON file. Default: `subscriptions.json` in the working directory. Useful in Docker to persist under a volume (e.g. `/app/data/subscriptions.json`). |
-| **`<TYPE>_IGNORED_IPS`** | (Optional) **One variable per event type**: comma-separated list of IPs to **allowlist** for that event. No notification is sent when the event’s source IP (from `remoteIp`, `ip`, or `source_ip`) is in this list. Variable name: event type with `.` replaced by `_`, uppercase, suffix `_IGNORED_IPS`. Example: `auth.success` → `AUTH_SUCCESS_IGNORED_IPS=1.1.1.1,1.2.2.2`. See [Per-event IP allowlist](#per-event-ip-allowlist). |
-| `DEDUP_ENABLED` | (Optional) Enable deduplication. Default: `true`. Set to `false` to disable. |
-| `DEDUP_WINDOW_SECONDS` | (Optional) Deduplication window in seconds. Same event+IP within this window = one notification. Default: `60`. |
-| `DATABASE_USE` | (Optional) Set to `true` (or `1`, `yes`, `on`) to enable MariaDB/MySQL storage. Default: `false`. |
-| `DATABASE` | (Optional) When `DATABASE_USE=true`, set to `mariadb` or `mysql`. If empty, database is disabled. |
-| `DATABASE_HOST` | (Optional) Database host. Default: `localhost`. In Docker: `mariadb`. |
-| `DATABASE_PORT` | (Optional) Database port. Default: `3306`. |
-| `DATABASE_NAME` | (Optional) Database name. Default: `stalwart_bot`. |
-| `DATABASE_USER` | (Optional) Database user. Default: `stalwart`. |
-| `DATABASE_PASSWORD` | (Optional) Database password. |
+| `TELEGRAM_WEBHOOK_URL` | (Optional) Use Telegram webhook instead of polling (e.g. `https://example.com/telegram-webhook`). |
+| `EVENTS_RETENTION_DAYS` | (Optional) Purge events older than X days. `0` = disabled. **Requires database.** |
+| `ADMIN_USER_IDS` | (Optional) Comma-separated Telegram user IDs for admin commands. |
+| `SUBSCRIPTIONS_FILE` | (Optional) Path to the subscriptions file. Default: `subscriptions.json`. In Docker use e.g. `/app/data/subscriptions.json`. |
+| **`<TYPE>_IGNORED_IPS`** | (Optional) Per-event IP allowlist. Example: `AUTH_SUCCESS_IGNORED_IPS=1.1.1.1,1.2.2.2`. See [Per-event IP allowlist](#per-event-ip-allowlist). |
+| `DEDUP_ENABLED` | (Optional) Enable deduplication. Default: `true`. |
+| `DEDUP_WINDOW_SECONDS` | (Optional) Deduplication window in seconds. Default: `60`. |
+| `DATABASE_USE` | (Optional) Set to `true` to use MariaDB/MySQL. Default: `false`. |
+| `DATABASE` | (Optional) When `DATABASE_USE=true`: `mariadb` or `mysql`. |
+| `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER`, `DATABASE_PASSWORD` | (Optional) Database connection. In Docker with DB, use host `mariadb`. |
+| `DEFAULT_LOCALE` | (Optional) Default locale: `en`, `fr`, `de`, `es`, `it`. Default: `en`. |
+| `DEFAULT_TIMEZONE` | (Optional) Default timezone (e.g. `Europe/Paris`, `UTC`). Default: `UTC`. |
+| `HEALTH_ALERT_USER_IDS` | (Optional) Comma-separated Telegram user IDs to notify when `/health` is degraded. |
+| `METRICS_PROTECTED` | (Optional) When `true`, `/metrics` requires Basic Auth. Default: `false`. |
 
-When the database is enabled, the bot stores: **all received events**, **blocked IPs** (from `security.ip-blocked`), **whitelisted IPs** (from `*_IGNORED_IPS`), and **subscriptions** in the database instead of `subscriptions.json`.
+When the database is enabled, the bot stores events, blocked IPs, whitelisted IPs, and subscriptions in the database.
 
----
+### Migrating subscriptions from file to database
 
-## Running the bot
+```bash
+bun run migrate:subscriptions
+```
 
-1. Copy `.env.example` to `.env` and set at least `TELEGRAM_BOT_TOKEN`, `WEBHOOK_KEY`, `WEBHOOK_USERNAME`, and `WEBHOOK_PASSWORD`.
-2. Install dependencies and start:
-   ```bash
-   bun install
-   bun run start
-   ```
-3. The server listens on `http://localhost:3000` (or the port set by `PORT`). The Telegram bot starts in polling mode.
+Requires `DATABASE_USE=true` and `DATABASE=mariadb` (or `mysql`) in `.env`.
 
 ---
 
-## Docker Compose
+## Docker
 
-You can run the entire stack with Docker Compose. Subscriptions are stored in a Docker volume so they persist across restarts.
+Two Compose setups are provided:
 
-1. Create a **`.env`** file at the project root (see [Environment variables](#environment-variables)).
+| File | Use case |
+|------|----------|
+| **`docker-compose.yml`** | Build from source (development or self-hosted). Uses `build: .`. |
+| **`docker-compose.user.yml`** | End users: run a pre-built image (e.g. from a registry). No build step. |
+
+### Option 1: Build from source (`docker-compose.yml`)
+
+1. Create a `.env` file (copy from `.env.example`).
 2. Start the service:
    ```bash
    docker compose up -d
    ```
-3. View logs: `docker compose logs -f tb-stalwart`
-4. Stop: `docker compose down`
+3. With MariaDB (optional): `docker compose --profile db up -d`
+4. Rebuild after code changes: `docker compose up -d --build`
 
-The compose file sets `SUBSCRIPTIONS_FILE=/app/data/subscriptions.json` and mounts a volume at `/app/data`, so **subscriptions are kept** when you restart or recreate the container. To rebuild the image after code changes: `docker compose up -d --build`.
+Subscriptions are stored in the `stalwart-data` volume (`SUBSCRIPTIONS_FILE=/app/data/subscriptions.json`).
 
-### Using MariaDB for storage
+### Option 2: Pre-built image for end users (`docker-compose.user.yml`)
 
-To store events, blocked IPs, whitelisted IPs, and subscriptions in MariaDB:
+For users who pull the image instead of building:
 
-1. Set in `.env`:
-   ```env
-   DATABASE_USE=true
-   DATABASE=mariadb
-   DATABASE_PASSWORD=your-secure-password
-   ```
-2. Start the stack with the database profile:
+1. Create a `.env` file.
+2. Run:
    ```bash
-   docker compose --profile db up -d
+   docker compose -f docker-compose.user.yml up -d
    ```
+3. With database: `docker compose -f docker-compose.user.yml --profile db up -d`
 
-MariaDB runs with the `db` profile, so it is optional: without `--profile db`, only the bot starts (using file storage). With `--profile db`, MariaDB starts first, then the bot connects and uses the database.
+Update the `image:` value in `docker-compose.user.yml` to your registry (e.g. `ghcr.io/your-org/tb-stalwart:latest`) when the image is published. If you build the image yourself, run `docker build -t tb-stalwart:latest .` then use `docker-compose.user.yml`.
 
 ### Deploying alongside Stalwart mail server
 
-To run the bot in the same Docker stack as your Stalwart mail server, use [`docker-compose.example-stack.yml`](docker-compose.example-stack.yml) as a template. Configure the Stalwart webhook `url` to `http://tb-stalwart:3000/` (service name as hostname within the shared network).
+Use [`docker-compose.example-stack.yml`](docker-compose.example-stack.yml) as a template to run the bot in the same stack as Stalwart. Set the Stalwart webhook `url` to `http://tb-stalwart:3000/` (service name as hostname).
+
+---
+
+## Webhook security
+
+Requests to `POST /` can be protected by two optional mechanisms (configured via `.env`):
+
+1. **HMAC-SHA256 signature** (when `WEBHOOK_KEY` is set): header `X-Signature`, value = HMAC-SHA256 of the raw JSON body, base64-encoded. Key = `WEBHOOK_KEY`.
+2. **HTTP Basic Auth** (when `WEBHOOK_USERNAME` and `WEBHOOK_PASSWORD` are set): header `Authorization: Basic <base64(username:password)>`.
+
+When both are set, both must pass. When neither is set, the endpoint accepts requests without verification. Invalid signature or auth → **401 Unauthorized**.
 
 ---
 
 ## Supported events
 
-The following event types are recognized and can be subscribed to:
+- `auth.error`, `auth.failed`, `auth.success`
+- `delivery.completed`, `delivery.delivered`, `delivery.failed`
+- `security.abuse-ban`, `security.authentication-ban`, `security.ip-blocked`
+- `server.startup`, `server.startup-error`
 
-- `auth.error`
-- `auth.failed`
-- `auth.success`
-- `delivery.completed`
-- `delivery.delivered`
-- `delivery.failed`
-- `security.abuse-ban`
-- `security.authentication-ban`
-- `security.ip-blocked`
-- `server.startup`
-- `server.startup-error`
-
-Any other type in the payload is ignored (no error, no notification).
-
-**Adding new events:** edit [`src/events/registry.ts`](src/events/registry.ts) and add a line such as `"auth.too-many-attempts": { hasIp: true }`. Optionally add a custom formatter in `src/messages/event-notification.ts`.
+Other types in the payload are ignored.
 
 ---
 
 ## Per-event IP allowlist
 
-For each event type you can define a list of **allowed IPs**: when an event’s source IP is in that list, **no Telegram notification is sent** for that event. This is useful to silence notifications from trusted IPs (e.g. your own servers or known clients).
+For each event type you can set **allowed IPs**: when the event’s source IP is in that list, **no Telegram notification is sent**.
 
-- **Variable naming**: take the event type, replace `.` with `_`, turn to uppercase, and append `_IGNORED_IPS`.  
+- **Variable name:** event type with `.` → `_`, uppercase, suffix `_IGNORED_IPS`.  
   Examples: `auth.success` → `AUTH_SUCCESS_IGNORED_IPS`, `security.ip-blocked` → `SECURITY_IP_BLOCKED_IGNORED_IPS`.
-- **Value format**: comma-separated IPs, e.g. `1.1.1.1,1.2.2.2,192.168.1.1`.
-- **Source IP**: the server uses the same logic as the message formatter and reads, in order, `remoteIp`, `ip`, or `source_ip` from the event data. If the event has no such field, the allowlist is not applied and the notification is sent as usual.
+- **Value:** comma-separated IPs, e.g. `1.1.1.1,1.2.2.2`.
 
 Example in `.env`:
 
 ```env
-# Do not send notifications for auth.success from these IPs
 AUTH_SUCCESS_IGNORED_IPS=46.225.80.55,176.181.48.249
-
-# Optional: same for other event types
-AUTH_FAILED_IGNORED_IPS=
 SECURITY_IP_BLOCKED_IGNORED_IPS=10.0.0.1
 ```
-
-Full list of variable names (each is optional):
-
-`AUTH_ERROR_IGNORED_IPS`, `AUTH_FAILED_IGNORED_IPS`, `AUTH_SUCCESS_IGNORED_IPS`, `DELIVERY_COMPLETED_IGNORED_IPS`, `DELIVERY_DELIVERED_IGNORED_IPS`, `DELIVERY_FAILED_IGNORED_IPS`, `SECURITY_ABUSE_BAN_IGNORED_IPS`, `SECURITY_AUTHENTICATION_BAN_IGNORED_IPS`, `SECURITY_IP_BLOCKED_IGNORED_IPS`, `SERVER_STARTUP_IGNORED_IPS`, `SERVER_STARTUP_ERROR_IGNORED_IPS`.
 
 ---
 
 ## Telegram commands
 
-- **`/start`** — Welcome message and command overview.
+- **`/start`** — Welcome and command overview.
 - **`/events`** — List of available event types.
-- **`/subscribe <event>`** — Subscribe to an event (e.g. `/subscribe auth.success`).
-- **`/subscribe all`** — Subscribe to all event types.
-- **`/unsubscribe <event>`** — Unsubscribe from an event.
-- **`/unsubscribe all`** — Unsubscribe from all events.
-- **`/list`** — Show your current subscriptions.
-- **`/status`** — Check bot and webhook status.
-- **`/help`** — Detailed help with examples.
+- **`/subscribe <event>`** / **`/subscribe all`** — Subscribe to an event or all.
+- **`/unsubscribe <event>`** / **`/unsubscribe all`** — Unsubscribe.
+- **`/list`** — Your current subscriptions.
+- **`/status`** — Bot and webhook status.
+- **`/prefs`** — Language, timezone, short notifications.
+- **`/help`** — Detailed help.
 
-All commands are also available via the menu buttons.
-
-If `ALLOWED_USER_ID` is set, only that Telegram user can use the bot; others receive “Access denied.”
+If `ALLOWED_USER_ID` is set, only that user can use the bot.
 
 ---
 
 ## Subscriptions
 
-- Subscriptions are stored in the file pointed to by **`SUBSCRIPTIONS_FILE`** (default: **`subscriptions.json`** at the project root).
-- Structure: `{ "telegram_user_id": ["event.type1", "event.type2", ...] }`.
-- On each webhook, the server **deduplicates** events (same type+IP within 60s = one notification), loads this file, gets the list of user IDs subscribed to the event type, and sends a Telegram message to each (send errors are logged but do not block others). Events whose source IP is in the per-event allowlist are skipped and do not trigger any notification.
+Subscriptions (and user preferences) are stored in the file at **`SUBSCRIPTIONS_FILE`** (default: `subscriptions.json`) or in the database when `DATABASE_USE=true`. The server deduplicates events (same type+IP within the configured window) and skips notifications when the source IP is in the per-event allowlist.
 
 ---
 
-## Testing the webhook
+## Testing
 
-1. Start the server (the webhook works even if the Telegram token is invalid):
-   ```bash
-   bun run start
-   ```
-2. In another terminal, send a test request (HMAC + Basic Auth) to `http://localhost:3000`:
-   ```bash
-   bun run test:webhook:local
-   ```
-   You should see: **Test successful: webhook received and verified.**
+All test documentation and scripts live in the **[`test/`](test/)** directory. See **[test/README.md](test/README.md)** for:
 
-   To test the Telegram rendering for a specific event type (optional):
-   ```bash
-   bun run test:webhook:local -- auth.failed
-   bun run test:webhook:local -- security.ip-blocked
-   ```
+- Unit and integration test commands
+- Webhook test script (local and remote)
+- Supported event types for tests
 
-To test against another URL (e.g. your deployed server):
+Quick commands:
 
-```bash
-bun run test:webhook https://mail.example.com/
-bun run test:webhook https://mail.example.com/ -- auth.success
-```
-
-The script uses `WEBHOOK_KEY` (or `WEEBHOOK_KEY`), `WEBHOOK_USERNAME`, and `WEBHOOK_PASSWORD` from `.env` to sign and authenticate the request.
-
-All test scripts are grouped in the [`test/`](test/) folder.
+- Run unit + i18n tests: `bun test` (or `bun run test:unit` for unit only)
+- Run webhook E2E (spawns server): `bun run test:e2e`
+- Manual webhook test (server must be running): `bun run test:webhook:local`
 
 ---
 
-## Local testing: opening the webhook port
+## Local deployment: opening the webhook port
 
-If you run the bot **on your own machine at home** and want Stalwart (e.g. on a remote server) to send webhooks to it, the webhook URL must reach your machine from the internet. Do not forget:
+If the bot runs at home and Stalwart is elsewhere, the webhook URL must reach your machine:
 
-1. **Open the webhook port on your machine**  
-   The server listens on **port 3000** by default (or the port set by `PORT` in `.env`). Ensure your **local firewall** allows incoming TCP traffic on that port so the bot can receive HTTP requests.
+1. **Firewall:** Allow incoming TCP on the server port (default 3000).
+2. **Router:** Forward that port to the machine running the bot.
 
-2. **Forward the port on your router**  
-   Configure **port forwarding** (NAT) on your router so that **external port 3000** (or the port you use) is forwarded to the **local IP and port** of the machine running the bot (e.g. `192.168.1.10:3000`). That way, when Stalwart sends a request to `http://<your-public-ip>:3000/`, the router will send it to your machine.
-
-Then set `WEBHOOK_URL` (and the Stalwart webhook `url`) to your public URL, for example `http://YOUR_PUBLIC_IP:3000/`. If your public IP changes (e.g. with a dynamic ISP), consider using a dynamic DNS hostname instead.
+Then set the Stalwart webhook `url` to e.g. `http://YOUR_PUBLIC_IP:3000/`. For a changing IP, use a dynamic DNS hostname.
 
 ---
 
@@ -293,14 +236,28 @@ Then set `WEBHOOK_URL` (and the Stalwart webhook `url`) to your public URL, for 
 
 The server exposes:
 
-- **`POST /`** — Endpoint to configure in Stalwart (same URL as `WEBHOOK_URL`). HMAC (`X-Signature`) and Basic Auth are required.
-- **`GET /`** and **`GET /health`** — Health check (returns `200 OK`).
+- **`POST /`** — Stalwart webhook. HMAC and Basic Auth required when configured.
+- **`GET /`** — Simple health check (200).
+- **`GET /health`** — JSON health (DB and bot status).
+- **`GET /metrics`** — Prometheus metrics.
+- **`GET /dashboard`** — Web dashboard (Basic Auth).
+- **`GET /api/export?format=json|csv&days=30&limit=1000`** — Export events (Basic Auth). **Requires database.**
+- **`GET /api/backup/subscriptions`** — Backup subscriptions as JSON (Basic Auth).
 
-On your Stalwart server, configure the webhook with:
+### Admin commands (Telegram, when using database)
+
+- **`/stats`** — Totals, 24h events, subscribers, events by type (7 days).
+- **`/users`** — Subscribers and subscription counts.
+- **`/events_count [days]`** — Event count.
+- **`/blocked [limit]`** — Blocked IPs with AbuseIPDB links.
+
+Admins are defined by `ADMIN_USER_IDS` (or `ALLOWED_USER_ID` if set).
+
+### Stalwart webhook configuration
 
 - **`signature-key`** = `WEBHOOK_KEY`
 - **`auth.username`** = `WEBHOOK_USERNAME`
 - **`auth.secret`** = `WEBHOOK_PASSWORD`
-- **`url`** = Your instance URL (e.g. `https://mail.example.com/` or `http://localhost:3000/`)
+- **`url`** = Your bot URL (e.g. `https://mail.example.com/` or `http://localhost:3000/`)
 
-Ensure **subscriptions** are persisted (e.g. volume in Docker or a durable path for `SUBSCRIPTIONS_FILE`) so user subscriptions survive restarts.
+Ensure subscriptions are persisted (Docker volume or durable `SUBSCRIPTIONS_FILE`) so they survive restarts.

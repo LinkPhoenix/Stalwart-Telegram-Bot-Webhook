@@ -1,33 +1,33 @@
 /**
  * Messages for /subscribe command.
  */
-export function getSubscribeUsage(): string {
-  return "Usage: /subscribe <event> (e.g. auth.success)";
+import type { Locale } from "../i18n";
+import { t, tReplace } from "../i18n";
+
+export function getSubscribeUsage(locale?: Locale): string {
+  return t(locale ?? "en", "subscribe.usage");
 }
 
-export function getSubscribePrompt(): string {
-  return "Select an event to subscribe to:";
+export function getSubscribePrompt(locale?: Locale): string {
+  return t(locale ?? "en", "subscribe.prompt");
 }
 
-export function getSubscribeAllAlready(): string {
-  return "✅ You're already subscribed to all available events.";
+export function getSubscribeAllAlready(locale?: Locale): string {
+  return "✅ " + t(locale ?? "en", "subscribe.allAlready");
 }
 
-export function getSubscribeUnknownEvent(): string {
-  return "Unknown event. Use /events for the list.";
+export function getSubscribeUnknownEvent(locale?: Locale): string {
+  return t(locale ?? "en", "subscribe.unknown");
 }
 
-export function getSubscribeSuccess(event: string): string {
-  return (
-    `✅ You've been added to <code>${event}</code>.\n\n` +
-    `You will receive all future events for this event type.`
-  );
+export function getSubscribeSuccess(event: string, locale?: Locale): string {
+  return "✅ " + tReplace(locale ?? "en", "subscribe.success", { event: `<code>${event}</code>` });
 }
 
-export function getSubscribeAlready(event: string): string {
-  return `ℹ️ Already subscribed to: <code>${event}</code>`;
+export function getSubscribeAlready(event: string, locale?: Locale): string {
+  return "ℹ️ " + tReplace(locale ?? "en", "subscribe.already", { event: `<code>${event}</code>` });
 }
 
-export function getSubscribeAllSuccess(count: number): string {
-  return `✅ Subscribed to <b>${count}</b> event type(s). You will receive all notifications.`;
+export function getSubscribeAllSuccess(count: number, locale?: Locale): string {
+  return "✅ " + tReplace(locale ?? "en", "subscribe.allSuccess", { count: `<b>${count}</b>` });
 }

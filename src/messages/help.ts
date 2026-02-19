@@ -1,10 +1,14 @@
 /**
  * Messages for /help command.
  */
-export function getHelpMessage(): string {
+import type { Locale } from "../i18n";
+import { t } from "../i18n";
+
+export function getHelpMessage(locale?: Locale): string {
+  const l = locale ?? "en";
   return (
-    "📖 <b>Help — Stalwart Monitor Bot</b>\n\n" +
-    "<b>Commands:</b>\n" +
+    "📖 <b>" + t(l, "help.title") + "</b>\n\n" +
+    "<b>" + t(l, "help.commands") + "</b>\n" +
     "• <code>/start</code> — Welcome & overview\n" +
     "• <code>/events</code> — List available event types\n" +
     "• <code>/subscribe &lt;event&gt;</code> — Subscribe to an event\n" +
@@ -15,7 +19,7 @@ export function getHelpMessage(): string {
     "• <code>/list</code> — Show your subscriptions\n" +
     "• <code>/status</code> — Check bot & webhook status\n" +
     "• <code>/help</code> — This help\n\n" +
-    "<b>Event types:</b> auth.success, auth.failed, auth.error, delivery.delivered, delivery.failed, security.ip-blocked, server.startup, etc.\n\n" +
-    "👇 Use the menu buttons for quick access."
+    "<b>" + t(l, "help.events") + "</b> auth.success, auth.failed, auth.error, delivery.delivered, delivery.failed, security.ip-blocked, server.startup, etc.\n\n" +
+    "👇 " + t(l, "help.cta")
   );
 }

@@ -14,6 +14,11 @@ const CLEANUP_INTERVAL_MS = 60_000;
 const cache = new Map<string, number>();
 
 let windowSeconds = DEFAULT_WINDOW_SECONDS;
+
+/** Clears dedup cache (for testing). */
+export function resetDeduplicationCache(): void {
+  cache.clear();
+}
 let enabled = true;
 
 /** Called once at startup to configure from env */

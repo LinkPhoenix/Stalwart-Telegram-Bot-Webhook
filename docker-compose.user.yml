@@ -1,24 +1,27 @@
+# Docker Compose for end users: run from a pre-built image (no build).
+# Replace the image name with your registry image when published (e.g. ghcr.io/your-org/tb-stalwart:latest).
+# Usage:
+#   docker compose -f docker-compose.user.yml up -d
+#   docker compose -f docker-compose.user.yml --profile db up -d   # with MariaDB
+
 services:
   tb-stalwart:
-    build: .
+    image: tb-stalwart:latest
     container_name: tb-stalwart
     restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
     env_file:
-      - stack.env
-    networks:
-      - stalwart-net
+      - .env
     environment:
       - PORT=3000
       - SUBSCRIPTIONS_FILE=/app/data/subscriptions.json
-      # Database (optional): set DATABASE_USE=true and DATABASE=mariadb in .env
-      # Then run: docker compose --profile db up -d
       - DATABASE_HOST=mariadb
       - DATABASE_PORT=3306
       - DATABASE_NAME=${DATABASE_NAME:-stalwart_bot}
       - DATABASE_USER=${DATABASE_USER:-stalwart}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
     volumes:
-      # Persist subscriptions across restarts (bot creates subscriptions.json if missing)
       - stalwart-data:/app/data
     depends_on:
       mariadb:
@@ -47,7 +50,3 @@ services:
 volumes:
   stalwart-data:
   stalwart-db-data:
-
-networks:
-  stalwart-net:
-    driver: bridge

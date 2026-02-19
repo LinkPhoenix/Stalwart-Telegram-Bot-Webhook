@@ -1,11 +1,13 @@
 /**
  * Messages for /status command.
  */
-export function getStatusOk(webhookOk: boolean, botOk: boolean): string {
+import type { Locale } from "../i18n";
+import { t } from "../i18n";
+
+export function getStatusOk(webhookOk: boolean, botOk: boolean, locale?: Locale): string {
+  const l = locale ?? "en";
   const parts: string[] = [];
-  if (webhookOk) parts.push("✅ Webhook server: OK");
-  else parts.push("❌ Webhook server: unreachable");
-  if (botOk) parts.push("✅ Telegram bot: OK");
-  else parts.push("❌ Telegram bot: error");
-  return "📊 <b>Status</b>\n\n" + parts.join("\n");
+  parts.push(webhookOk ? "✅ " + t(l, "status.webhookOk") : "❌ " + t(l, "status.webhookFail"));
+  parts.push(botOk ? "✅ " + t(l, "status.botOk") : "❌ " + t(l, "status.botFail"));
+  return "📊 <b>" + t(l, "status.title") + "</b>\n\n" + parts.join("\n");
 }

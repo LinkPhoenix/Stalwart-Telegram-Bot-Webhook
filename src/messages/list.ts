@@ -1,10 +1,14 @@
 /**
  * Messages for /list command (my subscriptions).
  */
-export function getListEmpty(): string {
-  return "📭 No subscriptions yet. Tap <b>Subscribe</b> to add events.";
+import type { Locale } from "../i18n";
+import { t } from "../i18n";
+
+export function getListEmpty(locale?: Locale): string {
+  return "📭 " + t(locale ?? "en", "list.emptyPrompt");
 }
 
-export function getListSubscriptions(events: string[]): string {
-  return "📌 <b>Your subscriptions</b>\n\n" + events.map((e) => `• <code>${e}</code>`).join("\n");
+export function getListSubscriptions(events: string[], locale?: Locale): string {
+  const title = t(locale ?? "en", "list.title");
+  return "📌 <b>" + title + "</b>\n\n" + events.map((e) => `• <code>${e}</code>`).join("\n");
 }

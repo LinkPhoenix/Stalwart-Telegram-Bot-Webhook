@@ -5,9 +5,11 @@
 
 import mysql from "mysql2/promise";
 import type { DatabaseConfig } from "../config";
+import { logError } from "../logger";
 import type { WebhookEvent } from "../webhook-auth";
 import { getIpFromEvent } from "../messages";
 import { SUPPORTED_EVENT_TYPES } from "../events";
+import { runMigrations } from "./migrations";
 
 let pool: mysql.Pool | null = null;
 
@@ -38,7 +40,7 @@ export async function initDatabase(config: DatabaseConfig): Promise<boolean> {
         queueLimit: 0,
       });
 
-      await ensureSchema();
+      await runMigrations(pool);
       return true;
     } catch (err) {
       console.warn(`[db] Connection attempt ${attempt}/${DB_CONNECT_RETRIES} failed:`, err);
@@ -67,58 +69,6 @@ async function query<T = mysql.RowDataPacket[]>(
   return rows as T;
 }
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS events (
-  id VARCHAR(255) PRIMARY KEY,
-  type VARCHAR(128) NOT NULL,
-  created_at DATETIME(6) NOT NULL,
-  data JSON,
-  source_ip VARCHAR(45),
-  INDEX idx_type (type),
-  INDEX idx_created_at (created_at)
-);
-
-CREATE TABLE IF NOT EXISTS blocked_ips (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  ip VARCHAR(45) NOT NULL,
-  event_id VARCHAR(255),
-  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  UNIQUE KEY uk_ip_event (ip, event_id),
-  INDEX idx_ip (ip),
-  INDEX idx_created_at (created_at)
-);
-
-CREATE TABLE IF NOT EXISTS whitelisted_ips (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  event_type VARCHAR(128) NOT NULL,
-  ip VARCHAR(45) NOT NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  UNIQUE KEY uk_event_ip (event_type, ip),
-  INDEX idx_event_type (event_type)
-);
-
-CREATE TABLE IF NOT EXISTS subscriptions (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  user_id VARCHAR(64) NOT NULL,
-  event_type VARCHAR(128) NOT NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  UNIQUE KEY uk_user_event (user_id, event_type),
-  INDEX idx_user_id (user_id),
-  INDEX idx_event_type (event_type)
-);
-`;
-
-async function ensureSchema(): Promise<void> {
-  const p = await getPool();
-  const statements = SCHEMA.trim()
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  for (const stmt of statements) {
-    await p.execute(stmt);
-  }
-}
-
 export async function storeEvent(ev: WebhookEvent): Promise<void> {
   if (!pool) return;
   const ip = getIpFromEvent(ev);
@@ -130,7 +80,7 @@ export async function storeEvent(ev: WebhookEvent): Promise<void> {
       [ev.id, ev.type, ev.createdAt, JSON.stringify(ev.data ?? {}), ip ?? null]
     );
   } catch (err) {
-    console.error("[db] storeEvent error:", err);
+    logError("db.storeEvent", "storeEvent error", err);
   }
 }
 
@@ -143,7 +93,7 @@ export async function storeBlockedIp(ip: string, eventId: string): Promise<void>
       [ip, eventId]
     );
   } catch (err) {
-    console.error("[db] storeBlockedIp error:", err);
+    logError("db.storeBlockedIp", "storeBlockedIp error", err);
   }
 }
 
@@ -162,7 +112,7 @@ export async function syncWhitelistedIps(
       }
     }
   } catch (err) {
-    console.error("[db] syncWhitelistedIps error:", err);
+    logError("db.syncWhitelistedIps", "syncWhitelistedIps error", err);
   }
 }
 
@@ -190,7 +140,7 @@ export async function subscribe(
     const insertId = (result as mysql.ResultSetHeader).affectedRows;
     return insertId === 1;
   } catch (err) {
-    console.error("[db] subscribe error:", err);
+    logError("db.subscribe", "subscribe error", err);
     return false;
   }
 }
@@ -209,7 +159,7 @@ export async function unsubscribe(
     );
     return (result as mysql.ResultSetHeader).affectedRows === 1;
   } catch (err) {
-    console.error("[db] unsubscribe error:", err);
+    logError("db.unsubscribe", "unsubscribe error", err);
     return false;
   }
 }
@@ -252,8 +202,202 @@ export async function unsubscribeAll(userId: string): Promise<number> {
     ).execute("DELETE FROM subscriptions WHERE user_id = ?", [userId]);
     return (result as mysql.ResultSetHeader).affectedRows;
   } catch (err) {
-    console.error("[db] unsubscribeAll error:", err);
+    logError("db.unsubscribeAll", "unsubscribeAll error", err);
     return 0;
+  }
+}
+
+export async function purgeOldEvents(retentionDays: number): Promise<number> {
+  if (!pool || retentionDays <= 0) return 0;
+  try {
+    const [result] = await (
+      await getPool()
+    ).execute(
+      "DELETE FROM events WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)",
+      [retentionDays]
+    );
+    return (result as mysql.ResultSetHeader).affectedRows;
+  } catch (err) {
+    logError("db.purgeOldEvents", "purgeOldEvents error", err);
+    return 0;
+  }
+}
+
+export interface StoredEvent {
+  id: string;
+  type: string;
+  created_at: string;
+  data: string;
+  source_ip: string | null;
+}
+
+export async function getEvents(
+  limit: number,
+  offset: number,
+  olderThanDays?: number
+): Promise<StoredEvent[]> {
+  if (!pool) return [];
+  try {
+    let sql = "SELECT id, type, created_at, data, source_ip FROM events";
+    const params: unknown[] = [];
+    if (olderThanDays != null && olderThanDays > 0) {
+      sql += " WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)";
+      params.push(olderThanDays);
+    }
+    sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+    params.push(limit, offset);
+    const rows = await query<StoredEvent[]>(sql, params);
+    return rows;
+  } catch (err) {
+    logError("db.getEvents", "getEvents error", err);
+    return [];
+  }
+}
+
+export async function getEventsCount(olderThanDays?: number): Promise<number> {
+  if (!pool) return 0;
+  try {
+    let sql = "SELECT COUNT(*) as cnt FROM events";
+    const params: unknown[] = [];
+    if (olderThanDays != null && olderThanDays > 0) {
+      sql += " WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)";
+      params.push(olderThanDays);
+    }
+    const rows = await query<{ cnt: number }[]>(sql, params);
+    return rows[0]?.cnt ?? 0;
+  } catch (err) {
+    logError("db.getEventsCount", "getEventsCount error", err);
+    return 0;
+  }
+}
+
+export async function getEventsCountByType(
+  olderThanDays?: number
+): Promise<Record<string, number>> {
+  if (!pool) return {};
+  try {
+    let sql = "SELECT type, COUNT(*) as cnt FROM events";
+    const params: unknown[] = [];
+    if (olderThanDays != null && olderThanDays > 0) {
+      sql += " WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)";
+      params.push(olderThanDays);
+    }
+    sql += " GROUP BY type ORDER BY cnt DESC";
+    const rows = await query<{ type: string; cnt: number }[]>(sql, params);
+    const out: Record<string, number> = {};
+    for (const r of rows) out[r.type] = r.cnt;
+    return out;
+  } catch (err) {
+    logError("db.getEventsCountByType", "getEventsCountByType error", err);
+    return {};
+  }
+}
+
+export interface BlockedIpRow {
+  ip: string;
+  event_id: string | null;
+  created_at: string;
+}
+
+export async function getBlockedIps(limit = 50): Promise<BlockedIpRow[]> {
+  if (!pool) return [];
+  try {
+    const rows = await query<BlockedIpRow[]>(
+      "SELECT ip, event_id, created_at FROM blocked_ips ORDER BY created_at DESC LIMIT ?",
+      [limit]
+    );
+    return rows;
+  } catch (err) {
+    logError("db.getBlockedIps", "getBlockedIps error", err);
+    return [];
+  }
+}
+
+export async function getSubscribersCount(): Promise<number> {
+  if (!pool) return 0;
+  try {
+    const rows = await query<{ cnt: number }[]>(
+      "SELECT COUNT(DISTINCT user_id) as cnt FROM subscriptions"
+    );
+    return rows[0]?.cnt ?? 0;
+  } catch (err) {
+    logError("db.getSubscribersCount", "getSubscribersCount error", err);
+    return 0;
+  }
+}
+
+export async function getAllSubscriptionsForExport(): Promise<
+  { user_id: string; event_type: string }[]
+> {
+  if (!pool) return [];
+  try {
+    return await query<{ user_id: string; event_type: string }[]>(
+      "SELECT user_id, event_type FROM subscriptions ORDER BY user_id, event_type"
+    );
+  } catch (err) {
+    console.error("[db] getAllSubscriptionsForExport error:", err);
+    return [];
+  }
+}
+
+export async function getUsersWithSubscriptionCount(): Promise<
+  { user_id: string; cnt: number }[]
+> {
+  if (!pool) return [];
+  try {
+    return await query<{ user_id: string; cnt: number }[]>(
+      "SELECT user_id, COUNT(*) as cnt FROM subscriptions GROUP BY user_id ORDER BY cnt DESC"
+    );
+  } catch (err) {
+    logError("db.getUsersWithSubscriptionCount", "getUsersWithSubscriptionCount error", err);
+    return [];
+  }
+}
+
+export async function getPrefs(userId: string): Promise<{
+  locale?: string;
+  timezone?: string;
+  shortNotifications?: boolean;
+}> {
+  if (!pool) return {};
+  try {
+    const rows = await query<{ locale: string | null; timezone: string | null; short_notifications: number }[]>(
+      "SELECT locale, timezone, short_notifications FROM user_preferences WHERE user_id = ?",
+      [userId]
+    );
+    const r = rows[0];
+    if (!r) return {};
+    return {
+      locale: r.locale ?? undefined,
+      timezone: r.timezone ?? undefined,
+      shortNotifications: r.short_notifications === 1,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export async function setPrefs(
+  userId: string,
+  prefs: { locale?: string; timezone?: string; shortNotifications?: boolean }
+): Promise<void> {
+  if (!pool) return;
+  try {
+    const current = await getPrefs(userId);
+    const locale = prefs.locale ?? current.locale ?? null;
+    const timezone = prefs.timezone ?? current.timezone ?? null;
+    const short = prefs.shortNotifications ?? current.shortNotifications ?? false;
+    await query(
+      `INSERT INTO user_preferences (user_id, locale, timezone, short_notifications)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         locale = VALUES(locale),
+         timezone = VALUES(timezone),
+         short_notifications = VALUES(short_notifications)`,
+      [userId, locale, timezone, short ? 1 : 0]
+    );
+  } catch (err) {
+    logError("db.setPrefs", "setPrefs error", err);
   }
 }
 

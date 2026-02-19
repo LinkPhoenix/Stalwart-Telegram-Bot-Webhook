@@ -4,7 +4,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SUPPORTED_EVENT_TYPES } from "./events";
+import { SUPPORTED_EVENT_TYPES } from "../events";
 
 export function loadEnv(): Record<string, string> {
   const out: Record<string, string> = { ...process.env } as Record<string, string>;
@@ -67,6 +67,18 @@ export interface AppConfig {
   notificationGroupWindowSeconds: number;
   /** Use Telegram webhook instead of polling. Requires TELEGRAM_WEBHOOK_URL */
   telegramWebhookUrl: string | undefined;
+  /** Delete events older than this (days). 0 = disabled */
+  eventsRetentionDays: number;
+  /** Admin user IDs (comma-separated). If empty, ALLOWED_USER_ID is admin */
+  adminUserIds: string[];
+  /** Default locale: en, fr, de, es, it */
+  defaultLocale: "en" | "fr" | "de" | "es" | "it";
+  /** Default timezone (e.g. Europe/Paris, UTC) */
+  defaultTimezone: string;
+  /** User IDs to notify when health check returns degraded */
+  healthAlertUserIds: string[];
+  /** When true, /metrics requires Basic Auth like dashboard */
+  metricsProtected: boolean;
 }
 
 function loadDatabaseConfig(env: Record<string, string>): DatabaseConfig {
@@ -101,18 +113,8 @@ export function loadConfig(env: Record<string, string>): AppConfig {
   const webhookKey = env["WEBHOOK_KEY"] ?? env["WEEBHOOK_KEY"] ?? "";
   const webhookUsername = env["WEBHOOK_USERNAME"] ?? env["WEEBHOOK_USERNAME"] ?? "";
   const webhookPassword = env["WEBHOOK_PASSWORD"] ?? env["WEEBHOOK_PASSWORD"] ?? "";
-  if (!webhookKey.trim()) {
-    console.error("WEBHOOK_KEY (or WEEBHOOK_KEY) missing in .env");
-    process.exit(1);
-  }
-  if (!webhookUsername.trim()) {
-    console.error("WEBHOOK_USERNAME (or WEEBHOOK_USERNAME) missing in .env");
-    process.exit(1);
-  }
-  if (!webhookPassword) {
-    console.error("WEBHOOK_PASSWORD (or WEEBHOOK_PASSWORD) missing in .env");
-    process.exit(1);
-  }
+  // WEBHOOK_KEY, WEBHOOK_USERNAME, WEBHOOK_PASSWORD are optional.
+  // When configured, they enable HMAC and Basic Auth verification.
 
   const database = loadDatabaseConfig(env);
   if (database.use && !database.password) {
@@ -133,6 +135,27 @@ export function loadConfig(env: Record<string, string>): AppConfig {
 
   const telegramWebhookUrl = (env["TELEGRAM_WEBHOOK_URL"] ?? "").trim() || undefined;
 
+  const retention = parseInt(env["EVENTS_RETENTION_DAYS"] ?? "0", 10);
+  const eventsRetentionDays = !isNaN(retention) && retention > 0 ? retention : 0;
+
+  const adminRaw = (env["ADMIN_USER_IDS"] ?? "").trim();
+  const adminUserIds = adminRaw
+    ? adminRaw.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  const localeRaw = (env["DEFAULT_LOCALE"] ?? "en").toLowerCase();
+  const defaultLocale: "en" | "fr" | "de" | "es" | "it" =
+    ["fr", "de", "es", "it"].includes(localeRaw) ? localeRaw as "fr" | "de" | "es" | "it" : "en";
+
+  const defaultTimezone = (env["DEFAULT_TIMEZONE"] ?? "UTC").trim() || "UTC";
+
+  const healthAlertRaw = (env["HEALTH_ALERT_USER_IDS"] ?? "").trim();
+  const healthAlertUserIds = healthAlertRaw
+    ? healthAlertRaw.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  const metricsProtected = /^(1|true|yes|on)$/i.test(env["METRICS_PROTECTED"] ?? "false");
+
   return {
     telegramBotToken,
     telegramTestEnv: /^(1|true|yes|on)$/i.test(env["TELEGRAM_TEST_ENV"] ?? ""),
@@ -148,5 +171,11 @@ export function loadConfig(env: Record<string, string>): AppConfig {
     quietHoursEnd,
     notificationGroupWindowSeconds,
     telegramWebhookUrl,
+    eventsRetentionDays,
+    adminUserIds,
+    defaultLocale,
+    defaultTimezone,
+    healthAlertUserIds,
+    metricsProtected,
   };
 }

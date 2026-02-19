@@ -98,10 +98,10 @@ const SAMPLE_DATA: Record<string, Record<string, unknown>> = {
   },
 };
 
-function parseArgs(env: Record<string, string>): { baseUrl: string; eventType: string } {
+function parseArgs(): { baseUrl: string; eventType: string } {
   const a = process.argv[2];
   const b = process.argv[3];
-  const defaultUrl = env["WEBHOOK_URL"] ?? env["WEEBHOOK_URL"] ?? "http://localhost:3000";
+  const defaultUrl = "http://localhost:3000";
 
   if (a?.startsWith("http://") || a?.startsWith("https://")) {
     const eventType = b && isSupportedEventType(b) ? b : "auth.success";
@@ -118,14 +118,15 @@ function parseArgs(env: Record<string, string>): { baseUrl: string; eventType: s
 
 async function main() {
   const env = loadEnv();
-  const { baseUrl, eventType } = parseArgs(env);
+  const { baseUrl, eventType } = parseArgs();
   const username = env["WEBHOOK_USERNAME"] ?? env["WEEBHOOK_USERNAME"] ?? "";
   const password = env["WEBHOOK_PASSWORD"] ?? env["WEEBHOOK_PASSWORD"] ?? "";
   const key = env["WEBHOOK_KEY"] ?? env["WEEBHOOK_KEY"] ?? "";
 
-  if (!username || !password || !key) {
+  const useAuth = key || username || password;
+  if (useAuth && (!key || !username || !password)) {
     console.error(
-      "Missing in .env: WEBHOOK_KEY, WEBHOOK_USERNAME, WEBHOOK_PASSWORD (WEEBHOOK_* also supported)"
+      "When using webhook auth, all three are required in .env: WEBHOOK_KEY, WEBHOOK_USERNAME, WEBHOOK_PASSWORD (WEEBHOOK_* also supported)"
     );
     process.exit(1);
   }
@@ -144,20 +145,19 @@ async function main() {
   };
 
   const rawBody = JSON.stringify(payload);
-  const signature = buildSignature(rawBody, key);
-  const authHeader = buildAuthHeader(username, password);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (useAuth) {
+    headers["X-Signature"] = buildSignature(rawBody, key);
+    headers["Authorization"] = buildAuthHeader(username, password);
+  }
 
   const target = baseUrl.replace(/\/$/, "") || "http://localhost:3000";
 
-  console.log("Sending test webhook to:", target, "| event:", eventType);
+  console.log("Sending test webhook to:", target, "| event:", eventType, useAuth ? "(with auth)" : "(no auth)");
 
   const res = await fetch(target, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authHeader,
-      "X-Signature": signature,
-    },
+    headers,
     body: rawBody,
   });
 

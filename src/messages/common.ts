@@ -1,14 +1,17 @@
 /**
  * Common messages (access, errors).
  */
-export function getAccessDenied(): string {
-  return "Access denied.";
+import type { Locale } from "../i18n";
+import { t } from "../i18n";
+
+export function getAccessDenied(locale?: Locale): string {
+  return t(locale ?? "en", "common.accessDenied");
 }
 
-export function getUnsubscribeEmpty(): string {
-  return "📭 You have no subscriptions. Tap <b>Subscribe</b> to add events.";
+export function getUnsubscribeEmpty(locale?: Locale): string {
+  return "📭 " + t(locale ?? "en", "unsubscribe.empty");
 }
 
-export function getMenuHint(): string {
-  return "👇 Use the menu below to manage your subscriptions.";
+export function getMenuHint(locale?: Locale): string {
+  return "👇 " + t(locale ?? "en", "common.menuHint");
 }

@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS user_preferences (
+  user_id VARCHAR(64) PRIMARY KEY,
+  locale VARCHAR(8),
+  timezone VARCHAR(64),
+  short_notifications TINYINT(1) DEFAULT 0,
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+);

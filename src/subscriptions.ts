@@ -4,7 +4,7 @@
  */
 
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { SUPPORTED_EVENT_TYPES, type EventType } from "./events";
 import {
   isDatabaseActive,
@@ -15,8 +15,14 @@ import {
   subscribeAll as dbSubscribeAll,
   unsubscribeAll as dbUnsubscribeAll,
 } from "./db";
+import { setPrefs } from "./user-prefs";
 
-const SUBSCRIPTIONS_FILE = process.env.SUBSCRIPTIONS_FILE ?? "subscriptions.json";
+function getSubscriptionsFile(): string {
+  const raw = process.env.SUBSCRIPTIONS_FILE ?? "subscriptions.json";
+  return resolve(process.cwd(), raw);
+}
+
+const PREFS_KEY = "__preferences";
 
 export interface SubscriptionsData {
   [userId: string]: EventType[];
@@ -24,11 +30,18 @@ export interface SubscriptionsData {
 
 let data: SubscriptionsData = {};
 
+function isSubscriptionsKey(k: string, v: unknown): boolean {
+  return k !== PREFS_KEY && Array.isArray(v);
+}
+
 async function load(): Promise<void> {
   try {
-    const raw = await Bun.file(SUBSCRIPTIONS_FILE).text();
-    const parsed = JSON.parse(raw) as SubscriptionsData;
-    data = typeof parsed === "object" && parsed !== null ? parsed : {};
+    const raw = await Bun.file(getSubscriptionsFile()).text();
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const obj = typeof parsed === "object" && parsed !== null ? parsed : {};
+    data = Object.fromEntries(
+      Object.entries(obj).filter(([k, v]) => isSubscriptionsKey(k, v))
+    ) as SubscriptionsData;
   } catch {
     data = {};
     try {
@@ -41,12 +54,24 @@ async function load(): Promise<void> {
 
 async function save(): Promise<void> {
   try {
-    const dir = dirname(SUBSCRIPTIONS_FILE);
-    await mkdir(dir, { recursive: true });
+    const filePath = getSubscriptionsFile();
+    const dir = dirname(filePath);
+    const cwd = process.cwd();
+    if (dir !== "." && dir !== filePath && dir !== cwd) {
+      await mkdir(dir, { recursive: true });
+    }
+    let existing: Record<string, unknown> = {};
+    try {
+      existing = JSON.parse(await Bun.file(getSubscriptionsFile()).text()) as Record<string, unknown>;
+    } catch {
+      /* file may not exist yet */
+    }
+    const prefs = existing[PREFS_KEY];
+    const out = { ...data, ...(prefs !== undefined && { [PREFS_KEY]: prefs }) };
+    await Bun.write(getSubscriptionsFile(), JSON.stringify(out, null, 2));
   } catch {
-    /* dir may already exist */
+    /* ignore */
   }
-  await Bun.write(SUBSCRIPTIONS_FILE, JSON.stringify(data, null, 2));
 }
 
 export async function getSubscriptions(userId: string): Promise<EventType[]> {
@@ -64,13 +89,21 @@ export async function subscribe(
   eventType: EventType
 ): Promise<boolean> {
   if (isDatabaseActive()) {
-    return dbSubscribe(userId, eventType);
+    const added = await dbSubscribe(userId, eventType);
+    if (added) {
+      await setPrefs(userId, {}).catch(() => {});
+    }
+    return added;
   }
   await load();
+  const isNewUser = !data[userId];
   if (!data[userId]) data[userId] = [];
   if (data[userId].includes(eventType)) return false;
   data[userId].push(eventType);
   await save();
+  if (isNewUser) {
+    await setPrefs(userId, {}).catch(() => {});
+  }
   return true;
 }
 
@@ -108,10 +141,15 @@ export async function getAllSubscribersForEvent(
 
 export async function subscribeAll(userId: string): Promise<number> {
   if (isDatabaseActive()) {
-    return dbSubscribeAll(userId);
+    const added = await dbSubscribeAll(userId);
+    if (added > 0) {
+      await setPrefs(userId, {}).catch(() => {});
+    }
+    return added;
   }
   await load();
   const current = data[userId] ?? [];
+  const isNewUser = !data[userId]?.length;
   let added = 0;
   for (const eventType of SUPPORTED_EVENT_TYPES) {
     if (!current.includes(eventType as EventType)) {
@@ -122,6 +160,9 @@ export async function subscribeAll(userId: string): Promise<number> {
   if (added > 0) {
     data[userId] = current;
     await save();
+    if (isNewUser) {
+      await setPrefs(userId, {}).catch(() => {});
+    }
   }
   return added;
 }
@@ -137,6 +178,29 @@ export async function unsubscribeAll(userId: string): Promise<number> {
   delete data[userId];
   await save();
   return count;
+}
+
+/**
+ * Returns all subscriptions for backup (file mode only).
+ * When DB is active, use db.getAllSubscriptionsForExport instead.
+ */
+export async function getAllSubscriptionsForBackup(): Promise<Record<string, string[]>> {
+  if (isDatabaseActive()) return {};
+  const file = getSubscriptionsFile();
+  try {
+    const raw = await Bun.file(file).text();
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const out: Record<string, string[]> = {};
+    for (const [userId, events] of Object.entries(parsed)) {
+      if (isSubscriptionsKey(userId, events)) {
+        out[userId] = (events as string[]).filter((e): e is string => typeof e === "string");
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 export { SUPPORTED_EVENT_TYPES };

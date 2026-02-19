@@ -11,31 +11,18 @@ import {
   isKnownEventType,
   type WebhookEvent,
 } from "./webhook-auth";
-import { getAllSubscribersForEvent } from "./subscriptions";
-import {
-  formatEventMessage,
-  getIpFromEvent,
-} from "./messages";
-import { isInQuietHours, passesSeverityFilter } from "./notification-filter";
-import {
-  addToBuffer,
-  formatGroupedMessage,
-  groupByType,
-  type PendingNotification,
-} from "./notification-buffer";
-import {
-  configureDeduplication,
-  shouldNotify,
-  startCleanupInterval,
-} from "./deduplication";
+import { setDefaultLocale } from "./i18n";
+import { configureDeduplication, startCleanupInterval } from "./deduplication";
 import { loadEnv, loadConfig } from "./config";
+import { notifySubscribers } from "./services/notification-service";
+import { getIpFromEvent } from "./messages";
 import {
   configureLogLevel,
+  logStartupBanner,
   logServerStart,
   logBotStart,
   logEventReceived,
-  logTelegramSent,
-  logEventSkipped,
+  logError,
 } from "./logger";
 import { createBot } from "./bot";
 import {
@@ -45,126 +32,60 @@ import {
   storeBlockedIp,
   syncWhitelistedIps,
   closeDatabase,
+  getAllSubscriptionsForExport,
 } from "./db";
+import { setPrefs } from "./user-prefs";
+import { getAllSubscriptionsForBackup } from "./subscriptions";
+import { startPurgeInterval, stopPurgeInterval } from "./db/purge";
+import {
+  handleExport,
+  handleBackupSubscriptions,
+  handleHealth,
+  handleDashboard,
+  handleMetrics,
+  incrementMetric,
+} from "./api";
 
 const env = loadEnv();
 const config = loadConfig(env);
 
 configureLogLevel(env);
 configureDeduplication(env);
+setDefaultLocale(config.defaultLocale);
 startCleanupInterval();
 
 const dbReady = await initDatabase(config.database);
+let dbFailed = config.database.use && !dbReady;
 if (dbReady) {
-  console.log("[db] Database connected, syncing whitelisted IPs...");
   await syncWhitelistedIps(config.ignoredIpsByEvent);
-} else if (config.database.use) {
-  console.warn("[db] Database configured but connection failed. Using file storage for subscriptions.");
+  if (config.eventsRetentionDays > 0) {
+    startPurgeInterval(config.eventsRetentionDays);
+  }
+}
+
+// Ensure all existing subscribers have a user_preferences record (for /lang, /prefs to work)
+try {
+  const userIds = new Set<string>();
+  if (isDatabaseActive()) {
+    const rows = await getAllSubscriptionsForExport();
+    for (const { user_id } of rows) userIds.add(user_id);
+  } else {
+    const backup = await getAllSubscriptionsForBackup();
+    for (const uid of Object.keys(backup)) userIds.add(uid);
+  }
+  for (const uid of userIds) {
+    await setPrefs(uid, {}).catch(() => {});
+  }
+} catch {
+  /* ignore */
 }
 
 const bot = createBot(config);
 
-async function notifySubscribers(ev: WebhookEvent): Promise<void> {
-  const sourceIp = getIpFromEvent(ev);
-  if (!isKnownEventType(ev.type)) return;
-  const ignoredIps = config.ignoredIpsByEvent.get(ev.type);
-  if (ignoredIps?.length) {
-    if (sourceIp && ignoredIps.includes(sourceIp)) {
-      logEventSkipped({
-        msgType: "event_ignored_ip",
-        trigger: ev.type,
-        ip: sourceIp,
-      });
-      return;
-    }
-  }
-  if (!passesSeverityFilter(ev.type, config.minSeverity)) {
-    logEventSkipped({
-      msgType: "event_skipped_severity",
-      trigger: ev.type,
-      ip: sourceIp,
-    });
-    return;
-  }
-  if (isInQuietHours(config.quietHoursStart, config.quietHoursEnd)) {
-    logEventSkipped({
-      msgType: "event_skipped_quiet_hours",
-      trigger: ev.type,
-      ip: sourceIp,
-    });
-    return;
-  }
-  if (!shouldNotify(ev, getIpFromEvent)) {
-    logEventSkipped({
-      msgType: "event_deduplicated",
-      trigger: ev.type,
-      ip: sourceIp,
-    });
-    return;
-  }
-  const userIds = await getAllSubscribersForEvent(ev.type);
-  if (userIds.length === 0) {
-    logEventSkipped({
-      msgType: "event_skipped_no_subscribers",
-      trigger: ev.type,
-      ip: sourceIp,
-    });
-    return;
-  }
-  const groupWindow = config.notificationGroupWindowSeconds;
-  if (groupWindow > 0) {
-    addToBuffer(ev, userIds, groupWindow, async (items: PendingNotification[]) => {
-      const grouped = groupByType(items);
-      for (const [eventType, { events, userIds: uids }] of grouped) {
-        const text = formatGroupedMessage(events);
-        for (const userId of uids) {
-          try {
-            await bot.telegram.sendMessage(userId, text, { parse_mode: "HTML" });
-            logTelegramSent({
-              level: "info",
-              msgType: "event_notification",
-              trigger: eventType,
-              ip: getIpFromEvent(events[events.length - 1]),
-              userId,
-            });
-          } catch (e) {
-            logTelegramSent({
-              level: "error",
-              msgType: "event_notification",
-              trigger: eventType,
-              ip: getIpFromEvent(events[events.length - 1]),
-              userId,
-            });
-            console.error("Telegram send error for user", userId, e);
-          }
-        }
-      }
-    });
-    return;
-  }
-  const text = formatEventMessage(ev);
-  for (const userId of userIds) {
-    try {
-      await bot.telegram.sendMessage(userId, text, { parse_mode: "HTML" });
-      logTelegramSent({
-        level: "info",
-        msgType: "event_notification",
-        trigger: ev.type,
-        ip: sourceIp,
-        userId,
-      });
-    } catch (e) {
-      logTelegramSent({
-        level: "error",
-        msgType: "event_notification",
-        trigger: ev.type,
-        ip: sourceIp,
-        userId,
-      });
-      console.error("Telegram send error for user", userId, e);
-    }
-  }
-}
+const useTelegramWebhook = !!config.telegramWebhookUrl;
+const telegramWebhookPath = config.telegramWebhookUrl
+  ? (new URL(config.telegramWebhookUrl).pathname || "/telegram-webhook")
+  : "";
 
 const server = Bun.serve({
   port: config.port,
@@ -179,13 +100,35 @@ const server = Bun.serve({
       console.log("[webhook] %s %s", method, path);
     }
 
+    if (path === "/api/export" && method === "GET") {
+      return handleExport(req, config);
+    }
+    if (path === "/api/backup/subscriptions" && method === "GET") {
+      return handleBackupSubscriptions(req, config);
+    }
+    if (path === "/metrics" && method === "GET") {
+      return handleMetrics(req, config);
+    }
+    if (path === "/health" && method === "GET") {
+      let botOk = true;
+      try {
+        await bot.telegram.getMe();
+      } catch {
+        botOk = false;
+      }
+      return handleHealth(bot, config, botOk);
+    }
+    if (path === "/dashboard" && method === "GET") {
+      return handleDashboard(req, config);
+    }
+
     if (useTelegramWebhook && telegramWebhookPath && path === telegramWebhookPath && method === "POST") {
       try {
         const body = await req.json();
         await bot.handleUpdate(body);
         return new Response("OK", { status: 200 });
       } catch (err) {
-        console.error("[bot] Webhook error:", err);
+        logError("bot.webhook", "Webhook error", err);
         return new Response("Internal Server Error", { status: 500 });
       }
     }
@@ -195,12 +138,16 @@ const server = Bun.serve({
       const signature = req.headers.get("x-signature") ?? undefined;
       const authHeader = req.headers.get("authorization") ?? undefined;
 
-      const signatureOk = verifySignature(rawBody, config.webhookKey, signature);
-      const authOk = verifyBasicAuth(
-        authHeader,
-        config.webhookUsername,
-        config.webhookPassword
-      );
+      const signatureOk = config.webhookKey.trim()
+        ? verifySignature(rawBody, config.webhookKey, signature)
+        : true;
+      const authOk = config.webhookUsername.trim()
+        ? verifyBasicAuth(
+            authHeader,
+            config.webhookUsername,
+            config.webhookPassword
+          )
+        : true;
 
       if (!signatureOk) {
         console.warn(
@@ -222,6 +169,8 @@ const server = Bun.serve({
       }
 
       const knownCount = payload.events.filter((e) => isKnownEventType(e.type)).length;
+      incrementMetric("webhook_requests_total");
+      incrementMetric("webhook_events_received", payload.events.length);
       console.log("[webhook] 200 OK: %d event(s) received, %d recognized", payload.events.length, knownCount);
 
       for (const ev of payload.events) {
@@ -233,20 +182,20 @@ const server = Bun.serve({
         });
         if (isDatabaseActive()) {
           storeEvent(ev).catch((e) =>
-            console.error("[db] storeEvent", ev.type, e)
+            logError("db.storeEvent", ev.type, e)
           );
           if (ev.type === "security.ip-blocked") {
             const ip = getIpFromEvent(ev);
             if (ip) {
-              storeBlockedIp(ip, ev.id).catch((e) =>
-                console.error("[db] storeBlockedIp", e)
-              );
+            storeBlockedIp(ip, ev.id).catch((e) =>
+              logError("db.storeBlockedIp", "storeBlockedIp", e)
+            );
             }
           }
         }
         if (isKnownEventType(ev.type)) {
-          notifySubscribers(ev).catch((e) =>
-            console.error("notifySubscribers", ev.type, e)
+          notifySubscribers(ev, bot, config).catch((e) =>
+            logError("notifySubscribers", ev.type, e)
           );
         }
       }
@@ -257,7 +206,7 @@ const server = Bun.serve({
       });
     }
 
-    if (url.pathname === "/health" || isRoot)
+    if (isRoot && method === "GET")
       return new Response("OK", { status: 200 });
 
     console.log("[webhook] 404 Not Found: %s %s", method, path);
@@ -265,12 +214,19 @@ const server = Bun.serve({
   },
 });
 
-logServerStart(server.port ?? config.port);
+// Récapitulatif en premier, avant tout autre log
+logStartupBanner(server.port ?? config.port, {
+  dbActive: isDatabaseActive(),
+  webhookAuth: !!(config.webhookKey.trim() && config.webhookUsername.trim()),
+  telegramMode: useTelegramWebhook ? "webhook" : "polling",
+  locale: config.defaultLocale,
+  timezone: config.defaultTimezone,
+});
 
-const useTelegramWebhook = !!config.telegramWebhookUrl;
-const telegramWebhookPath = config.telegramWebhookUrl
-  ? (new URL(config.telegramWebhookUrl).pathname || "/telegram-webhook")
-  : "";
+if (dbFailed) {
+  console.warn("[db] Database configured but connection failed. Using file storage for subscriptions.");
+}
+logServerStart(server.port ?? config.port);
 
 if (useTelegramWebhook) {
   (async () => {
@@ -278,7 +234,7 @@ if (useTelegramWebhook) {
       await bot.telegram.setWebhook(config.telegramWebhookUrl!);
       console.log("[bot] Telegram webhook set:", config.telegramWebhookUrl);
     } catch (err) {
-      console.error("[bot] Failed to set webhook:", err);
+      logError("bot.webhook", "Failed to set webhook", err);
     }
   })();
   logBotStart();
@@ -286,15 +242,17 @@ if (useTelegramWebhook) {
   bot.launch().then(() => {
     logBotStart();
   }).catch((err) => {
-    console.error("Telegram bot failed to start (invalid token?). Webhook still active.", err.message);
+    logError("bot", "Telegram bot failed to start (invalid token?). Webhook still active.", err);
   });
 }
 
 process.once("SIGINT", async () => {
   bot.stop("SIGINT");
+  stopPurgeInterval();
   await closeDatabase();
 });
 process.once("SIGTERM", async () => {
   bot.stop("SIGTERM");
+  stopPurgeInterval();
   await closeDatabase();
 });
